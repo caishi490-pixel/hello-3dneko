@@ -6,8 +6,11 @@
 > **关于架构定位与开源范围声明（务实说明）**
 >
 > 1. **确定性闭环 + 外部多模态 Agent 分工**：仓内闭环脚本（`retopo` / `uv-bake` / `cloth-rig`）采用**确定性几何检测 + 跨任务历史经验回读（`knowledge_recall.py` 读取 `learned_recipes.jsonl` / `failure_lessons.jsonl`）**驱动策略排序与失败回滚，本地运行零隐式 LLM 费用；视觉看图审阅与新算法迭代由外部多模态 Agent 负责。
-> 2. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**服装拟合与谐波权重 (`cloth-rig`)**、**内腔假腿袋智能删面 (`smart_face_culler.py`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
-> 3. **后续演进方向**：更高阶的 AI 贴图高清化多视角反投、整套角色多部件装配、表情 BlendShape 与游戏引擎直出等大头能力仍在持续研发中。
+> 2. **费用与零成本白嫖说明（防扫兴必读）**：
+>    - **全套核心 3D 闭环能力 100% 免费离线运行**：`retopo`（重拓扑）、`uv-bake`（自主 UV 与烘焙）、`cloth-rig`（服装拟合与绑骨）、`visual-cull` / `surgeon`（视觉外科修模工作台）以及 `dojo`（双科 Agent 练手场）**全部仅需本地 Python + Blender，不花一分钱、不需要任何 API Key**。你可以直接用自己手里的 `.glb`/`.blend`、免费开源模型（如 Tripo / Hunyuan3D 等任意渠道导出）或仓内自带练手考题直接跑。
+>    - **Hyper3D Rodin API Key 为可选付费项（需官方订阅）**：只有在使用可选的 `Stage 2` 商业 3D 生成命令（`@hyper3d/cli` / Hyper3D API）时，才需要向 Hyper3D 官方**付费订阅**获取 API Key；不想花钱完全可以跳过 `Stage 2`，不影响本仓库所有核心几何、拓扑、UV 与修模功能！
+> 3. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
+> 4. **后续演进方向**：更高阶的 AI 贴图高清化多视角反投、整套角色多部件装配、表情 BlendShape 与游戏引擎直出等大头能力仍在持续研发中。
 
 ---
 
@@ -128,7 +131,7 @@
 | **3D 引擎** | **Blender**（官方原生版） | `5.1.1` | 内置 Python `3.13.9` 与 `numpy 2.3.4`；脚本仅依赖原生 `bpy` / `bmesh` / `mathutils` / Cycles，**无需安装任何外部 Blender 插件** |
 | **宿主 Python** | **Python**（主控 CLI 与编排层） | `3.14.7`（兼容 `>= 3.10`） | 极简依赖：`Pillow 12.3.0`、`requests 2.34.2`（`pip install -e .` 即可） |
 | **Node.js 运行时** | **Node.js**（仅外部 CLI 需要） | `v24.19.0` | 用于安装和运行可选的 npm 全局命令行工具 |
-| **可选 3D 生成 CLI** | **Hyper3D Rodin CLI** (`@hyper3d/cli`) | `0.4.1` (`hyper3d`) | 可选 BYOK 付费 3D 生成/拆件工具（仅 `Stage 2` 生模需要，本地跑 `retopo`/`uv-bake`/`cloth-rig` 无需安装） |
+| **可选 3D 生成 CLI** | **Hyper3D Rodin CLI** (`@hyper3d/cli`) | `0.4.1` (`hyper3d`) | **⚠️ 需官方付费订阅获取 API Key**（仅可选 `Stage 2` 云端生模需要；不想花钱可跳过，使用任意本地/免费 `.glb` 跑 `retopo` / `uv-bake` / `cloth-rig` / `surgeon` / `dojo` 完全免费离线！） |
 | **可选协同 CLI** | **Codex CLI** (`@openai/codex`) | `0.161.0` (`codex-cli`) | 可选外部多 Agent 协同工具 |
 | **可选生图后端** | **ComfyUI / ComfyUI Cloud API** | `https://cloud.comfy.org` | 可选 2D 设定图/贴图重绘后端（通过 `X-API-Key` 或本地 ComfyUI 服务接入） |
 
