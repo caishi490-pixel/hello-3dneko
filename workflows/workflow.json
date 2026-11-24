@@ -1,0 +1,37 @@
+{
+  "name": "hello-3dneko-full-chain-pipeline",
+  "description": "Hello 3DNeko multi-agent orchestrator coordinating 2D image gen, UV/material optimization, Hyper3D Rodin, and headless Blender.",
+  "entry": "antigravity_orchestrator.py",
+  "argsSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["project_dir"],
+    "properties": {
+      "project_dir": {
+        "type": "string",
+        "description": "Absolute path to projects/<character_id> initialized via run_pipeline.py init"
+      },
+      "from_stage": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5,
+        "default": 1
+      },
+      "to_stage": {
+        "type": "integer",
+        "minimum": 0,
+        "maximum": 5,
+        "default": 5
+      },
+      "codex_mode": {
+        "type": "string",
+        "enum": ["cli", "desktop"],
+        "default": "cli"
+      },
+      "dry_run": {
+        "type": "boolean",
+        "default": false
+      }
+    }
+  }
+}

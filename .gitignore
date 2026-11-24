@@ -1,0 +1,47 @@
+# Hello 3DNeko strict gitignore (keeps user projects, private models, logs & secrets local)
+
+# User generated workspaces, intermediate attempts, renders & models
+projects/
+archive_private/
+*.blend
+*.blend1
+*.blend2
+*.glb
+*.gltf
+*.fbx
+*.obj
+*.mtl
+*.stl
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.exr
+*.tga
+
+# Environment, secrets, state locks & runtime ledgers
+.env
+.env.*
+!.env.example
+.circuit_breaker.json
+credits_ledger.jsonl
+*key*.txt
+*secret*
+*token*
+
+# Local runtime knowledge logs & benchmark records (schema README.md remains tracked)
+knowledge/*.jsonl
+knowledge/EXPERIMENT_SCORECARD.md
+
+# Python caches & packaging
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+dist/
+build/
+*.egg-info/
+.venv/
+venv/
+.DS_Store
+Thumbs.db
