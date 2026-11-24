@@ -115,6 +115,21 @@
 
 > **最小运行门槛**：如果你只使用核心 3D 闭环能力（`retopo`、`uv-bake`、`cloth-rig`、`smart_face_culler`、`experiments`），本机只需要安装 **Python `>= 3.10`（含 `Pillow`、`requests`） + Blender `4.x/5.x`** 即可 100% 离线运行，无需任何 Node.js 或付费 API 账号。
 
+### 作者的多 Agent 协同与 MCP 工具栈（可选外挂）
+
+本项目的研发与日常生产并非单一脚本裸跑，而是由 **多模态 AI Agent + 一组本地 MCP Server** 协同完成的（**主仓库代码与以下外挂完全解耦、零强依赖**，社区用户可按需挑选同生态工具自行组装）：
+
+| 角色 / 工具 | 实际使用的软件 / MCP | 在工作流中的作用 |
+| :--- | :--- | :--- |
+| **主控多模态 Agent** | **Google Antigravity**（配 `browser` / `research` / `image-generator` 子代理） | 负责整体架构规划、手写 Blender 几何/权重算法、**直接看图验收渲染图与线框图**、发现穿模/细飘带断碎并迭代修复 |
+| **并行协同 Agent** | **OpenAI Codex CLI** (`codex-cli`) | 负责并行开发独立子模块（如贴图高清重绘与多视角反投）、执行独立代码任务与审查 |
+| **跨 Agent 协同桥** | **本地 Bridge MCP**（`codex-bridge` 等） | 打通主控 Agent 与本地 Codex 之间的受控任务委派与结果回传（内置零自动重试与熔断规则） |
+| **长期记忆 MCP** | **Basic Memory MCP**（本地 Markdown 知识库检索） | 提供跨会话的语义/全文记忆检索（`bm_search` / `bm_read` / `bm_write`），用于持久记录审美偏好、踩坑教训与项目决策；*注：公开仓本体不内置也不强绑定外部记忆服务端，仓内自带独立轻量化 JSONL + `knowledge_recall.py`* |
+| **Blender 实时 MCP** | **Blender MCP** | 用于交互式探查场景信息、快速预览与调试；正式大批量重拓扑、烘焙与动作压测仍通过无头 `blender -b` 子进程隔离执行以确保稳定可复现 |
+| **上下文压缩 MCP** | **Context-Mode MCP** | 对长日志、代码库与技术文档做本地索引与按需检索，减少长工程会话的上下文膨胀 |
+| **其他按需辅助 MCP** | **Chrome DevTools MCP** / **Adobe Illustrator MCP** | 按需用于前端/网页调试或 2D 矢量素材辅助 |
+| **领域规范 Skill** | 仓内内置 [hello-3dneko-pipeline Skill](skills/hello-3dneko-pipeline/SKILL.md) | 沉淀了角色比例蓝图、Blender/Rodin 常见陷阱、贴图优化与 6 维重拓扑配方，任意支持 Skill 的 Agent 加载后即可直接按规范干活 |
+
 ---
 
 ## BYOK（用户自配 Key）与“有羊毛呢”新手提示
