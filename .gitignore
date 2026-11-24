@@ -13,6 +13,9 @@ archive_private/
 *.mtl
 *.stl
 *.png
+!assets/
+!assets/showcase/
+!assets/showcase/*.png
 *.jpg
 *.jpeg
 *.webp

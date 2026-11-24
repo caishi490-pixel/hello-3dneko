@@ -48,6 +48,34 @@ AI Agent 驱动的二次元 / 风格化 3D 角色工作流与**闭环自主重�
 
 ---
 
+## 效果展示（纯原创成果与闭环重拓扑/UV 预览）
+
+> 以下全部展示图均为项目发起人纯原创设计与管线实测渲染（已严格排除任何非原创参考素模）；后段自主 UV/烘焙成品图仅作暂未开源模块的效果预览，核心代码属发起人专有知识产权。
+
+### 1. 2D 三视图 / 刀版拆分与 3D 分件及动作验收
+
+| 2D `40°` A-Pose 三视图 | 2D 服饰模块化刀版拆分 | 3D BANG 部件拆分 |
+| :---: | :---: | :---: |
+| ![2D Turnaround](assets/showcase/01_2D_Character_Turnaround_Apose.png) | ![2D Breakdown](assets/showcase/02_2D_Outfit_Breakdown_Sheet.png) | ![3D BANG](assets/showcase/03_3D_BANG_Exploded_Parts.png) |
+
+| 3D 高精分件检查 | 全角色四视角与特写验收 | 多姿态动作验收 |
+| :---: | :---: | :---: |
+| ![3D HighPoly Parts](assets/showcase/04_3D_Parts_HighPoly_QC.png) | ![3D Four View](assets/showcase/05_3D_Character_Four_View_QC.png) | ![3D Action Poses](assets/showcase/06_3D_Character_Action_Pose_QC.png) |
+
+### 2. 高难配饰与多层百褶裙闭环重拓扑（约 500k 面 → 15k–17k 四边面）
+
+| 束腰 · 烘焙正面 | 束腰 · 四边面线框（正面） | 束腰 · 四边面线框（3/4 视角） | 束腰 · UV 排布图 |
+| :---: | :---: | :---: | :---: |
+| ![Corset Shaded](assets/showcase/07_Corset_Retopo_UV_Shaded_Front.png) | ![Corset Wire Front](assets/showcase/09_Corset_Quad_Wireframe_Front.png) | ![Corset Wire 3/4](assets/showcase/10_Corset_Quad_Wireframe_34.png) | ![Corset UV](assets/showcase/11_Corset_UV_Layout.png) |
+
+| 多层交领内裙 · 烘焙正面 | 多层交领内裙 · 四边面线框（正面） | 多层交领内裙 · 四边面线框（3/4 视角） | 多层交领内裙 · UV 排布图 |
+| :---: | :---: | :---: | :---: |
+| ![Dress Shaded](assets/showcase/12_Dress_Pleated_Retopo_UV_Shaded_Front.png) | ![Dress Wire Front](assets/showcase/14_Dress_Pleated_Quad_Wireframe_Front.png) | ![Dress Wire 3/4](assets/showcase/15_Dress_Pleated_Quad_Wireframe_34.png) | ![Dress UV](assets/showcase/16_Dress_Pleated_UV_Layout.png) |
+
+> 补充 3/4 视角材质渲染：[束腰 3/4 视角渲染](assets/showcase/08_Corset_Retopo_UV_Shaded_34.png) · [多层交领内裙 3/4 视角渲染](assets/showcase/13_Dress_Pleated_Retopo_UV_Shaded_34.png)
+
+---
+
 ## 开源功能范围与实测状态
 
 | 模块 / 能力 | CLI 命令 | 当前开源与验证状态 |
