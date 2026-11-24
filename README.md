@@ -99,6 +99,24 @@
 
 ---
 
+## 已验证本地参考环境配置（作者实机清单）
+
+以下为项目发起人本机完整跑通 `retopo`、`uv-bake`、`cloth-rig`、`smart_face_culler` 与全部 12 项测试的实际软件环境（均无第三方闭源 Blender 插件依赖）：
+
+| 类别 | 组件 / 型号 | 实测版本 | 说明 |
+| :--- | :--- | :--- | :--- |
+| **系统与显卡** | Windows 11 + `NVIDIA GeForce RTX 5070 Ti` | `10.0.26200` | Cycles 烘焙与质检渲染自动优先使用 `OPTIX` GPU；无独显环境会自动降级为 `CPU` |
+| **3D 引擎** | **Blender**（官方原生版） | `5.1.1` | 内置 Python `3.13.9` 与 `numpy 2.3.4`；脚本仅依赖原生 `bpy` / `bmesh` / `mathutils` / Cycles，**无需安装任何外部 Blender 插件** |
+| **宿主 Python** | **Python**（主控 CLI 与编排层） | `3.14.7`（兼容 `>= 3.10`） | 极简依赖：`Pillow 12.3.0`、`requests 2.34.2`（`pip install -e .` 即可） |
+| **Node.js 运行时** | **Node.js**（仅外部 CLI 需要） | `v24.19.0` | 用于安装和运行可选的 npm 全局命令行工具 |
+| **可选 3D 生成 CLI** | **Hyper3D Rodin CLI** (`@hyper3d/cli`) | `0.4.1` (`hyper3d`) | 可选 BYOK 付费 3D 生成/拆件工具（仅 `Stage 2` 生模需要，本地跑 `retopo`/`uv-bake`/`cloth-rig` 无需安装） |
+| **可选协同 CLI** | **Codex CLI** (`@openai/codex`) | `0.161.0` (`codex-cli`) | 可选外部多 Agent 协同工具 |
+| **可选生图后端** | **ComfyUI / ComfyUI Cloud API** | `https://cloud.comfy.org` | 可选 2D 设定图/贴图重绘后端（通过 `X-API-Key` 或本地 ComfyUI 服务接入） |
+
+> **最小运行门槛**：如果你只使用核心 3D 闭环能力（`retopo`、`uv-bake`、`cloth-rig`、`smart_face_culler`、`experiments`），本机只需要安装 **Python `>= 3.10`（含 `Pillow`、`requests`） + Blender `4.x/5.x`** 即可 100% 离线运行，无需任何 Node.js 或付费 API 账号。
+
+---
+
 ## BYOK（用户自配 Key）与“有羊毛呢”新手提示
 
 Hello 3DNeko 开源版严格采用 **100% BYOK（Bring Your Own Key）** 模式：本仓不托管、不代充、也不转售任何付费 AI 服务账号，所有 API 请求均由用户在本地直接配置并调用，`guards.py` 会持久化 `generation_id` 并在连续失败时自动熔断以保护用户余额。
