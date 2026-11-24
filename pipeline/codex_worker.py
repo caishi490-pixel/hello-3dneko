@@ -34,7 +34,7 @@ class CodexWorkOrder:
     work_dir: Path
     input_images: list[Path] = field(default_factory=list)
     expected_outputs: list[Path] = field(default_factory=list)
-    mode: str = "cli"  # "cli" or "desktop"
+    mode: str = "cli"  # "manual", "cli", or "desktop"
     sandbox: str = "workspace-write"
     model: str = ""
     codex_cmd: str = "codex.cmd"
@@ -115,13 +115,35 @@ def run_codex_work_order(
         "input_images": [str(p) for p in order.input_images],
         "missing_inputs": missing_inputs,
         "expected_outputs": [str(p) for p in order.expected_outputs],
-        "command": cmd if order.mode == "cli" else [str(DEFAULT_COLLAB_PYTHON), str(DEFAULT_CODEX_BRIDGE_SCRIPT or "<HELLO_3DNEKO_CODEX_BRIDGE_SCRIPT>"), "--send", "<prompt_file>"],
+        "command": (
+            ["manual:supply-images-via-current-agent-or-local-files"]
+            if order.mode == "manual"
+            else (
+                cmd
+                if order.mode == "cli"
+                else [str(DEFAULT_COLLAB_PYTHON), str(DEFAULT_CODEX_BRIDGE_SCRIPT or "<HELLO_3DNEKO_CODEX_BRIDGE_SCRIPT>"), "--send", "<prompt_file>"]
+            )
+        ),
     }
 
     if dry_run:
         plan_path = order_dir / f"{order.task_id}_dry_run.json"
         plan_path.write_text(json.dumps(preview, ensure_ascii=False, indent=2), encoding="utf-8")
         return {"status": "dry_run", **preview, "plan_path": str(plan_path)}
+
+    if order.mode == "manual":
+        missing_outputs = [str(p) for p in order.expected_outputs if not Path(p).is_file()]
+        return {
+            "status": "completed" if not missing_outputs else "awaiting_manual_assets",
+            "mode": "manual",
+            "prompt_file": str(prompt_file),
+            "expected_outputs": [str(p) for p in order.expected_outputs],
+            "missing_outputs": missing_outputs,
+            "note": (
+                "Codex skipped (--codex-mode manual). Generate images with your current Agent's built-in "
+                "image model (e.g. Antigravity image-generator), local ComfyUI, or supply local PNGs directly."
+            ),
+        }
 
     if missing_inputs:
         raise FileNotFoundError(f"Missing Codex input images: {missing_inputs}")

@@ -312,7 +312,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_init.add_argument("--brief", required=True, help="Visual & outfit design brief")
     p_init.add_argument("--ref", action="append", help="Optional reference image path (repeatable)")
     p_init.add_argument("--projects-dir", default="", help="Base projects folder override")
-    p_init.add_argument("--codex-mode", default="cli", choices=("cli", "desktop"))
+    p_init.add_argument("--codex-mode", default="manual", choices=("manual", "cli", "desktop"))
     p_init.add_argument("--force", action="store_true")
     p_init.set_defaults(func=cmd_init)
 
@@ -325,7 +325,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_run.add_argument("--project", required=True)
     p_run.add_argument("--from-stage", default="0")
     p_run.add_argument("--to-stage", default="5")
-    p_run.add_argument("--codex-mode", default="", choices=("", "cli", "desktop"))
+    p_run.add_argument("--codex-mode", default="", choices=("", "manual", "cli", "desktop"))
     p_run.add_argument("--dry-run", action="store_true")
     p_run.set_defaults(func=cmd_run)
 

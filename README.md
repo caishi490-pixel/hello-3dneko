@@ -9,6 +9,7 @@
 > 2. **费用与零成本白嫖说明（防扫兴必读）**：
 >    - **全套核心 3D 闭环能力 100% 免费离线运行**：`retopo`（重拓扑）、`uv-bake`（自主 UV 与烘焙）、`cloth-rig`（服装拟合与绑骨）、`visual-cull` / `surgeon`（视觉外科修模工作台）以及 `dojo`（双科 Agent 练手场）**全部仅需本地 Python + Blender，不花一分钱、不需要任何 API Key**。你可以直接用自己手里的 `.glb`/`.blend`、免费开源模型（如 Tripo / Hunyuan3D 等任意渠道导出）或仓内自带练手考题直接跑。
 >    - **Hyper3D Rodin API Key 为可选付费项（需官方订阅）**：只有在使用可选的 `Stage 2` 商业 3D 生成命令（`@hyper3d/cli` / Hyper3D API）时，才需要向 Hyper3D 官方**付费订阅**获取 API Key；不想花钱完全可以跳过 `Stage 2`，不影响本仓库所有核心几何、拓扑、UV 与修模功能！
+>    - **Codex CLI 也完全非必需（无需同时订阅多个 AI！）**：`init` 默认已设为 `--codex-mode manual`——**不需要订阅 Codex**，直接用你手头单个 Agent（例如反重力 Antigravity 自带生图模型）、本地 ComfyUI 或自己画好/生好 2D 图放进目录即可无缝衔接后续 3D 流程！
 > 3. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
 > 4. **后续演进方向**：更高阶的 AI 贴图高清化多视角反投、整套角色多部件装配、表情 BlendShape 与游戏引擎直出等大头能力仍在持续研发中。
 
@@ -132,7 +133,7 @@
 | **宿主 Python** | **Python**（主控 CLI 与编排层） | `3.14.7`（兼容 `>= 3.10`） | 极简依赖：`Pillow 12.3.0`、`requests 2.34.2`（`pip install -e .` 即可） |
 | **Node.js 运行时** | **Node.js**（仅外部 CLI 需要） | `v24.19.0` | 用于安装和运行可选的 npm 全局命令行工具 |
 | **可选 3D 生成 CLI** | **Hyper3D Rodin CLI** (`@hyper3d/cli`) | `0.4.1` (`hyper3d`) | **⚠️ 需官方付费订阅获取 API Key**（仅可选 `Stage 2` 云端生模需要；不想花钱可跳过，使用任意本地/免费 `.glb` 跑 `retopo` / `uv-bake` / `cloth-rig` / `surgeon` / `dojo` 完全免费离线！） |
-| **可选协同 CLI** | **Codex CLI** (`@openai/codex`) | `0.161.0` (`codex-cli`) | 可选外部多 Agent 协同工具 |
+| **可选协同 CLI** | **Codex CLI** (`@openai/codex`) | `0.161.0` (`codex-cli`) | **完全非必需**（`init` 默认 `--codex-mode manual`；只用反重力自带生图模型或自己生图后放进目录即可，无需额外订阅 Codex） |
 | **可选生图后端** | **ComfyUI / ComfyUI Cloud API** | `https://cloud.comfy.org` | 可选 2D 设定图/贴图重绘后端（通过 `X-API-Key` 或本地 ComfyUI 服务接入） |
 
 > **最小运行门槛**：如果你只使用核心 3D 闭环能力（`retopo`、`uv-bake`、`cloth-rig`、`smart_face_culler`、`experiments`），本机只需要安装 **Python `>= 3.10`（含 `Pillow`、`requests`） + Blender `4.x/5.x`** 即可 100% 离线运行，无需任何 Node.js 或付费 API 账号。
