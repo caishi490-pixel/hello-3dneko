@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 
 from pipeline.config import (
+    DEFAULT_BLENDER_EXE,
     REPO_ROOT,
     CodexSettings,
     ProjectConfig,
@@ -157,6 +159,147 @@ def cmd_experiments(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_visual_cull(args: argparse.Namespace) -> int:
+    script = REPO_ROOT / "blender_scripts" / "visual_face_picker_culler.py"
+    cmd = [
+        DEFAULT_BLENDER_EXE,
+        "-b",
+        "--python-exit-code",
+        "1",
+        "--python",
+        str(script),
+        "--",
+        "--input",
+        str(Path(args.input).resolve()),
+        "--out-dir",
+        str(Path(args.out).resolve()),
+        "--mode",
+        args.mode,
+        "--views",
+        args.views,
+        "--res",
+        str(args.res),
+        "--id-res",
+        str(args.id_res),
+        "--grow-angle-deg",
+        str(args.grow_angle_deg),
+        "--grow-hops",
+        str(args.grow_hops),
+        "--xray-depth-m",
+        str(args.xray_depth_m),
+        "--bisect-depth-m",
+        str(args.bisect_depth_m),
+        "--prune-cut-slivers",
+        str(args.prune_cut_slivers),
+        "--orphan-max-pct",
+        str(args.orphan_max_pct),
+    ]
+    if args.target_mesh:
+        cmd.extend(["--target-mesh", args.target_mesh])
+    if args.xray_garment:
+        cmd.append("--xray-garment")
+    if args.mask_json:
+        cmd.extend(["--mask-json", str(Path(args.mask_json).resolve())])
+    for pk in args.pick or []:
+        cmd.extend(["--pick", pk])
+    for ex in args.exclude or []:
+        cmd.extend(["--exclude", ex])
+    for bi in args.bisect or []:
+        cmd.extend(["--bisect", bi])
+    if args.dry_run:
+        print(json.dumps({"status": "dry_run", "command": "visual-cull", "mode": args.mode, "blender_cmd": cmd}, ensure_ascii=False, indent=2))
+        return 0
+    return int(subprocess.run(cmd, check=False).returncode)
+
+
+def cmd_surgeon(args: argparse.Namespace) -> int:
+    script = REPO_ROOT / "blender_scripts" / "agent_mesh_surgeon.py"
+    cmd = [
+        DEFAULT_BLENDER_EXE,
+        "-b",
+        "--python-exit-code",
+        "1",
+        "--python",
+        str(script),
+        "--",
+        "--session",
+        str(Path(args.session).resolve()),
+        "--action",
+        args.action,
+        "--view",
+        args.view,
+        "--zoom",
+        str(args.zoom),
+        "--res",
+        str(args.res),
+        "--id-res",
+        str(args.id_res),
+        "--op",
+        args.op,
+        "--depth-m",
+        str(args.depth_m),
+        "--angle-deg",
+        str(args.angle_deg),
+        "--steps",
+        str(args.steps),
+        "--orphan-max-pct",
+        str(args.orphan_max_pct),
+    ]
+    if args.input:
+        cmd.extend(["--input", str(Path(args.input).resolve())])
+    if args.target_mesh:
+        cmd.extend(["--target-mesh", args.target_mesh])
+    if args.focus_selected:
+        cmd.append("--focus-selected")
+    if args.box:
+        cmd.extend(["--box", args.box])
+    if args.point:
+        cmd.extend(["--point", args.point])
+    if args.xray:
+        cmd.append("--xray")
+    if args.quadify:
+        cmd.append("--quadify")
+    if args.out_blend:
+        cmd.extend(["--out-blend", str(Path(args.out_blend).resolve())])
+    if args.out_glb:
+        cmd.extend(["--out-glb", str(Path(args.out_glb).resolve())])
+    for ln in args.line or []:
+        cmd.extend(["--line", ln])
+    if args.dry_run:
+        print(json.dumps({"status": "dry_run", "command": "surgeon", "action": args.action, "blender_cmd": cmd}, ensure_ascii=False, indent=2))
+        return 0
+    return int(subprocess.run(cmd, check=False).returncode)
+
+
+def cmd_dojo(args: argparse.Namespace) -> int:
+    script = REPO_ROOT / "blender_scripts" / "surgeon_dojo.py"
+    cmd = [
+        DEFAULT_BLENDER_EXE,
+        "-b",
+        "--python-exit-code",
+        "1",
+        "--python",
+        str(script),
+        "--",
+        "--dojo-dir",
+        str(Path(args.dojo_dir).resolve()),
+        "--exam",
+        args.exam,
+        "--action",
+        args.action,
+        "--target-tris",
+        str(args.target_tris),
+    ]
+    if args.candidate:
+        cmd.extend(["--candidate", str(Path(args.candidate).resolve())])
+    if args.session:
+        cmd.extend(["--session", str(Path(args.session).resolve())])
+    if args.dry_run:
+        print(json.dumps({"status": "dry_run", "command": "dojo", "action": args.action, "blender_cmd": cmd}, ensure_ascii=False, indent=2))
+        return 0
+    return int(subprocess.run(cmd, check=False).returncode)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Hello 3DNeko — Multi-Agent 3D Character, Topology, UV/Bake & Garment Rigging Pipeline"
@@ -236,6 +379,67 @@ def build_parser() -> argparse.ArgumentParser:
     p_cloth.add_argument("--seed", type=int, default=0)
     p_cloth.add_argument("--dry-run", action="store_true")
     p_cloth.set_defaults(func=cmd_cloth_rig)
+
+    p_vc = sub.add_parser("visual-cull", help="Universal visual Face-ID surgical culler & plane bisector (capture|preview|apply|bisect)")
+    p_vc.add_argument("--input", required=True)
+    p_vc.add_argument("--out", required=True)
+    p_vc.add_argument("--mode", choices=("capture", "preview", "apply", "bisect"), required=True)
+    p_vc.add_argument("--target-mesh", default="")
+    p_vc.add_argument("--views", default="front,front_skirt,bottom_up,back")
+    p_vc.add_argument("--res", type=int, default=512)
+    p_vc.add_argument("--id-res", type=int, default=256)
+    p_vc.add_argument("--pick", action="append", default=[])
+    p_vc.add_argument("--exclude", action="append", default=[])
+    p_vc.add_argument("--bisect", action="append", default=[])
+    p_vc.add_argument("--xray-garment", action="store_true")
+    p_vc.add_argument("--xray-depth-m", type=float, default=0.12)
+    p_vc.add_argument("--bisect-depth-m", type=float, default=0.22)
+    p_vc.add_argument("--grow-angle-deg", type=float, default=38.0)
+    p_vc.add_argument("--grow-hops", type=int, default=1)
+    p_vc.add_argument("--mask-json", default="")
+    p_vc.add_argument("--prune-cut-slivers", type=int, default=4)
+    p_vc.add_argument("--orphan-max-pct", type=float, default=3.0)
+    p_vc.add_argument("--dry-run", action="store_true")
+    p_vc.set_defaults(func=cmd_visual_cull)
+
+    p_sg = sub.add_parser("surgeon", help="Stateful Edit-Mode mesh surgery workbench for Agents")
+    p_sg.add_argument("--session", required=True)
+    p_sg.add_argument(
+        "--action",
+        required=True,
+        choices=("open", "look", "select-box", "select-linked", "select-backface", "grow", "shrink", "delete", "bisect", "clean", "undo", "export"),
+    )
+    p_sg.add_argument("--input", default="")
+    p_sg.add_argument("--target-mesh", default="")
+    p_sg.add_argument("--view", default="front_skirt")
+    p_sg.add_argument("--zoom", type=float, default=1.0)
+    p_sg.add_argument("--focus-selected", action="store_true")
+    p_sg.add_argument("--res", type=int, default=448)
+    p_sg.add_argument("--id-res", type=int, default=256)
+    p_sg.add_argument("--box", default="")
+    p_sg.add_argument("--point", default="")
+    p_sg.add_argument("--op", choices=("set", "add", "sub"), default="set")
+    p_sg.add_argument("--xray", action="store_true")
+    p_sg.add_argument("--depth-m", type=float, default=0.16)
+    p_sg.add_argument("--angle-deg", type=float, default=38.0)
+    p_sg.add_argument("--steps", type=int, default=1)
+    p_sg.add_argument("--orphan-max-pct", type=float, default=3.0)
+    p_sg.add_argument("--line", action="append", default=[])
+    p_sg.add_argument("--quadify", action="store_true")
+    p_sg.add_argument("--out-blend", default="")
+    p_sg.add_argument("--out-glb", default="")
+    p_sg.add_argument("--dry-run", action="store_true")
+    p_sg.set_defaults(func=cmd_surgeon)
+
+    p_dj = sub.add_parser("dojo", help="Procedural Agent Practice Dojo: surgery (leg pouch cull) & retopo_500k (~500k high-poly quad retopo)")
+    p_dj.add_argument("--dojo-dir", required=True)
+    p_dj.add_argument("--exam", choices=("surgery", "retopo_500k"), default="surgery")
+    p_dj.add_argument("--action", choices=("setup", "grade"), required=True)
+    p_dj.add_argument("--candidate", default="")
+    p_dj.add_argument("--session", default="")
+    p_dj.add_argument("--target-tris", type=int, default=500000)
+    p_dj.add_argument("--dry-run", action="store_true")
+    p_dj.set_defaults(func=cmd_dojo)
 
     return parser
 

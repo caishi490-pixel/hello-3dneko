@@ -29,8 +29,14 @@ Before generating or sculpting a body mesh, anchor macro silhouette and polygon 
 
 When cleaning generated `.glb` assets in Blender:
 1. **Smooth Without Cracking UV Seams**: Use a spatial-welded vertex graph (`round(wp, 4)`) + loop UV remap instead of naive smoothing on un-welded `.glb` meshes.
-2. **Strip A-Pose Shell Weight Bleed**: Remove stray `ForeArm`/`Hand`/`Finger` weights on torso/skirts and enable `use_deform_preserve_volume = True` when matching DQS setups (prefer LBS matching glTF targets).
-3. **Verify**: Check manifold integrity and render headless multi-view rest + extreme ROM poses.
+2. **Surgical Geometry Removal (`visual-cull`)**: Never hardcode 3D XYZ boxes or approve cuts from bright color renders alone. Follow [visual-surgical-cull-sop.md](./references/visual-surgical-cull-sop.md):
+   - Run `python run_pipeline.py visual-cull --mode capture` to get 10×10 grid renders + exact raycast Face-ID buffers.
+   - **Prefer `--mode bisect`** (`view:x0,y0->x1,y1:drop=left|right|above|below`) to slice straight macro-silhouette channels (e.g., vertical leg corridors) with automatic UV & weight interpolation, or use `--mode preview --xray-garment` + `--mode apply` for irregular cavities.
+   - **Mandatory Hard FAIL Gate**: Always inspect the dark-matte body + `0.85px` orange wireframe audit (`04_after_bisect_wireframe.png` / `04_after_wireframe_xray.png`) and iterate until zero wrapped wires or floating rings remain.
+3. **Strip A-Pose Shell Weight Bleed**: Remove stray `ForeArm`/`Hand`/`Finger` weights on torso/skirts and enable `use_deform_preserve_volume = True` when matching DQS setups (prefer LBS matching glTF targets).
+4. **Verify**: Check manifold integrity and render headless multi-view rest + extreme ROM poses.
+
+When teaching or checking an agent's binding decisions, use [the rigging practice lab](./references/rig-agent-learning-lab.md). Diagnose the part and joint from measured motion, change only the affected weights, and use an independently re-imported GLB to check attachment, garment coverage and package completeness.
 
 ## Stage 3: AI Aesthetic Polish, Image Generation & UV Texture Optimization
 
@@ -52,8 +58,9 @@ See [blender-rodin-pitfalls.md](./references/blender-rodin-pitfalls.md):
 Use `run_pipeline.py` in the Hello 3DNeko workspace:
 - Full-chain CLI runner: `python run_pipeline.py init ...` -> `python run_pipeline.py run --project <dir> [--dry-run]`
 - Closed-loop 6-pillar retopology & bake: `python run_pipeline.py retopo --input <raw.glb> --out <dir>` — see [closed-loop-retopology.md](./references/closed-loop-retopology.md).
-- Unified 7-metric experiment ledger: `python run_pipeline.py experiments`.
-- *(Note: Post-retopology closed-loop modules — autonomous UV/baking optimization and garment rigging/weight solvers — are unverified/withheld proprietary IP and excluded from this open-source cut.)*
+- Autonomous UV & Baking: `python run_pipeline.py uv-bake --high <high.glb> --low <low.blend> --out <dir>` and `python run_pipeline.py experiments`.
+- Visual Surgical Bisect & Face-ID Cull: `python run_pipeline.py visual-cull --input <scene.blend> --out <dir> --mode capture|bisect|preview|apply [...]` — see [visual-surgical-cull-sop.md](./references/visual-surgical-cull-sop.md).
+- Stateful Agent Mesh Surgeon (Interactive Edit Mode): `python run_pipeline.py surgeon --session <dir> --action open|look|select-box|select-linked|select-backface|grow|shrink|delete|bisect|clean|undo|export [...]` — renders a 3-panel triptych (`Grid+Selection | Clay MatCap with Backface Warning | Dark-Matte Body + 0.85px Wireframe`) on every step with automatic snapshot `undo`. Always run mesh surgery **before** quad retopology whenever possible so the final topology stays clean quads.
 
 ## Outcome Evolution Rule
 

@@ -739,6 +739,310 @@ class PipelineSmokeTests(unittest.TestCase):
             self.assertTrue(tk_rep["steps"][1]["result"]["normal_aware"])
             self.assertEqual(tk_rep["steps"][2]["action"], "refine_quad_flow")
 
+            # 3. Run visual_face_picker_culler.py end-to-end (capture -> preview -> apply)
+            vp_dir = root / "visual_pick_demo"
+            vp_script = REPO_ROOT / "blender_scripts" / "visual_face_picker_culler.py"
+            p_cap = subprocess.run(
+                [
+                    blender_bin,
+                    "-b",
+                    "--python-exit-code",
+                    "1",
+                    "--python",
+                    str(vp_script),
+                    "--",
+                    "--input",
+                    str(raw_glb),
+                    "--out-dir",
+                    str(vp_dir),
+                    "--mode",
+                    "capture",
+                    "--views",
+                    "front,back",
+                    "--res",
+                    "128",
+                    "--id-res",
+                    "64",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_cap.returncode, 0, msg=p_cap.stderr)
+            self.assertTrue((vp_dir / "capture_meta.json").is_file())
+            self.assertTrue((vp_dir / "01_grid_capture_sheet.png").is_file())
+            self.assertTrue((vp_dir / "face_id_front.npy").is_file())
+
+            p_prev = subprocess.run(
+                [
+                    blender_bin,
+                    "-b",
+                    "--python-exit-code",
+                    "1",
+                    "--python",
+                    str(vp_script),
+                    "--",
+                    "--input",
+                    str(raw_glb),
+                    "--out-dir",
+                    str(vp_dir),
+                    "--mode",
+                    "preview",
+                    "--xray-garment",
+                    "--xray-depth-m",
+                    "0.25",
+                    "--views",
+                    "front,back",
+                    "--res",
+                    "128",
+                    "--pick",
+                    "front:D3:G6",
+                    "--exclude",
+                    "back:0.0,0.0,1.0,1.0",
+                    "--grow-hops",
+                    "1",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_prev.returncode, 0, msg=p_prev.stderr)
+            mask_json = vp_dir / "selected_faces.json"
+            self.assertTrue(mask_json.is_file())
+            self.assertTrue((vp_dir / "02_preview_red_mask.png").is_file())
+            mask_data = json.loads(mask_json.read_text(encoding="utf-8"))
+            self.assertGreater(mask_data["selected_count"], 0)
+            self.assertTrue(mask_data["xray_garment"])
+
+            p_app = subprocess.run(
+                [
+                    blender_bin,
+                    "-b",
+                    "--python-exit-code",
+                    "1",
+                    "--python",
+                    str(vp_script),
+                    "--",
+                    "--input",
+                    str(raw_glb),
+                    "--out-dir",
+                    str(vp_dir),
+                    "--mode",
+                    "apply",
+                    "--views",
+                    "front,back",
+                    "--res",
+                    "128",
+                    "--mask-json",
+                    str(mask_json),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_app.returncode, 0, msg=p_app.stderr)
+            self.assertTrue((vp_dir / "03_after_cull.png").is_file())
+            self.assertTrue((vp_dir / "04_after_wireframe_xray.png").is_file())
+            self.assertTrue((vp_dir / "synthetic_garment_visual_culled.glb").is_file())
+            app_rep = json.loads((vp_dir / "visual_cull_report.json").read_text(encoding="utf-8"))
+            self.assertLess(app_rep["deletion"]["post_faces"], app_rep["deletion"]["pre_faces"])
+
+            # 4. Run surgical bisect mode on the synthetic mesh and verify clean plane slicing
+            p_bi = subprocess.run(
+                [
+                    blender_bin,
+                    "-b",
+                    "--python-exit-code",
+                    "1",
+                    "--python",
+                    str(vp_script),
+                    "--",
+                    "--input",
+                    str(raw_glb),
+                    "--out-dir",
+                    str(vp_dir),
+                    "--mode",
+                    "bisect",
+                    "--views",
+                    "front,back",
+                    "--res",
+                    "128",
+                    "--bisect",
+                    "front:0.40,0.20->0.40,0.80:drop=right",
+                    "--bisect",
+                    "front:0.60,0.20->0.60,0.80:drop=left",
+                    "--exclude",
+                    "back:0.0,0.0,1.0,1.0",
+                    "--bisect-depth-m",
+                    "0.35",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_bi.returncode, 0, msg=p_bi.stderr)
+            self.assertTrue((vp_dir / "04_after_bisect_wireframe.png").is_file())
+            self.assertTrue((vp_dir / "synthetic_garment_surgical_bisected.glb").is_file())
+            bi_rep = json.loads((vp_dir / "surgical_bisect_report.json").read_text(encoding="utf-8"))
+            self.assertGreater(bi_rep["bisect_stats"]["sliced_edges"], 0)
+            self.assertGreater(bi_rep["bisect_stats"]["deleted_faces"], 0)
+
+            # 5. Verify run_pipeline.py visual-cull CLI wrapper dry-run
+            p_cli = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "run_pipeline.py"),
+                    "visual-cull",
+                    "--input",
+                    str(raw_glb),
+                    "--out",
+                    str(vp_dir),
+                    "--mode",
+                    "bisect",
+                    "--bisect",
+                    "front:0.40,0.20->0.40,0.80:drop=right",
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_cli.returncode, 0, msg=p_cli.stderr)
+            cli_payload = json.loads(p_cli.stdout)
+            self.assertEqual(cli_payload["status"], "dry_run")
+            self.assertEqual(cli_payload["command"], "visual-cull")
+            self.assertEqual(cli_payload["mode"], "bisect")
+
+            # 6. Verify stateful agent_mesh_surgeon (open -> select-box -> grow -> delete -> undo -> clean -> export)
+            sg_dir = root / "surgeon_sess"
+            sg_script = REPO_ROOT / "blender_scripts" / "agent_mesh_surgeon.py"
+            for sg_args in [
+                ["--action", "open", "--input", str(raw_glb), "--view", "front", "--res", "128", "--id-res", "64"],
+                ["--action", "select-box", "--box", "D3:F6", "--res", "128", "--id-res", "64"],
+                ["--action", "grow", "--steps", "1", "--res", "128", "--id-res", "64"],
+                ["--action", "delete", "--res", "128", "--id-res", "64"],
+                ["--action", "undo", "--res", "128", "--id-res", "64"],
+                ["--action", "clean", "--quadify", "--res", "128", "--id-res", "64"],
+                ["--action", "export", "--out-blend", str(sg_dir / "out.blend"), "--out-glb", str(sg_dir / "out.glb")],
+            ]:
+                p_sg = subprocess.run(
+                    [blender_bin, "-b", "--python-exit-code", "1", "--python", str(sg_script), "--", "--session", str(sg_dir), *sg_args],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(p_sg.returncode, 0, msg=f"surgeon {sg_args} failed: {p_sg.stderr}")
+            self.assertTrue((sg_dir / "renders" / "inspect_triptych.png").is_file())
+            self.assertTrue((sg_dir / "out.glb").is_file())
+
+            p_sg_cli = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "run_pipeline.py"), "surgeon", "--session", str(sg_dir), "--action", "undo", "--dry-run"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_sg_cli.returncode, 0, msg=p_sg_cli.stderr)
+            self.assertEqual(json.loads(p_sg_cli.stdout)["command"], "surgeon")
+
+            # 7. Verify procedural Agent Practice Dojo (setup + baseline grade FAIL + CLI dry-run)
+            dj_dir = root / "dojo_test"
+            dj_script = REPO_ROOT / "blender_scripts" / "surgeon_dojo.py"
+            p_dj_setup = subprocess.run(
+                [blender_bin, "-b", "--python-exit-code", "1", "--python", str(dj_script), "--", "--dojo-dir", str(dj_dir), "--action", "setup"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_dj_setup.returncode, 0, msg=p_dj_setup.stderr)
+            self.assertTrue((dj_dir / "dojo_practice_dress.blend").is_file())
+            self.assertTrue((dj_dir / "dojo_truth.json").is_file())
+
+            p_dj_grade = subprocess.run(
+                [
+                    blender_bin,
+                    "-b",
+                    "--python-exit-code",
+                    "1",
+                    "--python",
+                    str(dj_script),
+                    "--",
+                    "--dojo-dir",
+                    str(dj_dir),
+                    "--action",
+                    "grade",
+                    "--candidate",
+                    str(dj_dir / "dojo_practice_dress.blend"),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_dj_grade.returncode, 0, msg=p_dj_grade.stderr)
+            sc = json.loads((dj_dir / "dojo_scorecard.json").read_text(encoding="utf-8"))
+            self.assertEqual(sc["status"], "FAIL")
+
+            p_dj_cli = subprocess.run(
+                [sys.executable, str(REPO_ROOT / "run_pipeline.py"), "dojo", "--dojo-dir", str(dj_dir), "--action", "setup", "--dry-run"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_dj_cli.returncode, 0, msg=p_dj_cli.stderr)
+            self.assertEqual(json.loads(p_dj_cli.stdout)["command"], "dojo")
+
+            # 8. Verify retopo_500k exam setup & grader (fast low-tris CI variant)
+            dj_ret = root / "dojo_retopo_test"
+            p_ret_setup = subprocess.run(
+                [
+                    blender_bin,
+                    "-b",
+                    "--python-exit-code",
+                    "1",
+                    "--python",
+                    str(dj_script),
+                    "--",
+                    "--dojo-dir",
+                    str(dj_ret),
+                    "--exam",
+                    "retopo_500k",
+                    "--action",
+                    "setup",
+                    "--target-tris",
+                    "4000",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_ret_setup.returncode, 0, msg=p_ret_setup.stderr)
+            self.assertTrue((dj_ret / "dojo_500k_highpoly.glb").is_file())
+            p_ret_grade = subprocess.run(
+                [
+                    blender_bin,
+                    "-b",
+                    "--python-exit-code",
+                    "1",
+                    "--python",
+                    str(dj_script),
+                    "--",
+                    "--dojo-dir",
+                    str(dj_ret),
+                    "--exam",
+                    "retopo_500k",
+                    "--action",
+                    "grade",
+                    "--candidate",
+                    str(dj_ret / "dojo_500k_highpoly.blend"),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_ret_grade.returncode, 0, msg=p_ret_grade.stderr)
+            ret_sc = json.loads((dj_ret / "dojo_scorecard.json").read_text(encoding="utf-8"))
+            self.assertEqual(ret_sc["exam"], "retopo_500k")
+            self.assertEqual(ret_sc["status"], "FAIL")
+
 
 if __name__ == "__main__":
     unittest.main()

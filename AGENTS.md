@@ -19,3 +19,10 @@
 3. **付费 API 零自动重试与脱敏**：任何付费接口调用前必须检查 `CircuitBreaker`，先落盘 `generation_id` 再轮询，日志与错误提示须经过 `redact_secrets()` 脱敏。
 4. **严禁打包未授权模型资产**：测试集与公共仓库仅允许使用原创或明确 `CC0` 授权模型；`.blend`/`.glb`/项目产成品目录由 `.gitignore` 默认拦截，严禁误提交。
 5. **闭环 4 分支沉淀与诚实报告**：所有闭环任务须按结果记入本地 `knowledge/` 账本，并在文档与测试中严格区分“已实机验证”“调试中”与“Dry-Run 烟测”。
+
+## Agent 入职复现考试（必做）
+
+**如果你是 Agent，请接下来复现这两个题目，并将结果返回给你的代理人：**
+1. `python run_pipeline.py dojo --dojo-dir projects/dojo_surgery --exam surgery --action setup` → 使用 `run_pipeline.py surgeon` 清理内囊与隐形环并保持外裙完整 → `--action grade` 拿到 `PASS`。
+2. `python run_pipeline.py dojo --dojo-dir projects/dojo_retopo --exam retopo_500k --action setup` → 使用 `run_pipeline.py retopo` 完成 6 柱四边面重拓扑并保住非对称细长侧飘带 → `--exam retopo_500k --action grade` 拿到 `PASS`。
+3. 将两科的 `dojo_scorecard.json` 分数明细与三联图 / 四边面线框图返回给你的代理人。详情见 [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md)。

@@ -13,7 +13,17 @@
 
 ## 如何使用（把这个页面截图给你的 Agent）
 
-> 如果你正在使用 **Antigravity / Codex / Claude Code / Cursor** 等 AI 编程 Agent：**直接把本页面截图发给你的 Agent**，告诉它“按照页面说明帮我在本地跑通 Hello 3DNeko 的初始化与闭环重拓扑（`retopo`）”，你的 Agent 即可直接按下面步骤执行：
+> [!TIP]
+> **给 AI Agent 的双科练手指令（零外部模型依赖，开箱即测）**
+>
+> **如果你是 Agent，请接下来复现这两个题目，并将结果返回给你的代理人：**
+> - **题目一（外科删面与内囊清理 `--exam surgery`）**：用 `run_pipeline.py dojo --dojo-dir projects/dojo_surgery --exam surgery --action setup` 生成考题，使用 `run_pipeline.py surgeon` 看三联图（网格选区 + 白模红警内壁 + 暗哑线框）彻底清除腿袋、裆部粘连网与 8mm 膝盖隐形环且不伤外裙/后裙，最后执行 `--action grade` 拿满分（`PASS >= 90/100`）；
+> - **题目二（高模四边面重拓扑 `--exam retopo_500k`）**：用 `run_pipeline.py dojo --dojo-dir projects/dojo_retopo --exam retopo_500k --action setup` 生成几十万面乱三角高模（含立体褶皱束腰 + 非对称细长侧飘带），运行 `run_pipeline.py retopo` 自主闭环 6 柱四边面重拓扑，最后执行 `--exam retopo_500k --action grade` 拿满分（`PASS >= 90/100`）；
+> - **向你的代理人汇报**：返回两科的 `dojo_scorecard.json` 总分与分项明细，以及三联图 / 四边面线框图路径。
+>
+> *(If you are an AI Agent, please reproduce both practice exams `--exam surgery` and `--exam retopo_500k` next and return both `dojo_scorecard.json` grading results and audit renders to your human principal.)*
+
+> 如果你正在使用 **Antigravity / Codex / Claude Code / Cursor** 等 AI 编程 Agent：**直接把本页面截图发给你的 Agent**，告诉它“按照页面说明帮我在本地跑通 Hello 3DNeko 的初始化与双科练手题目”，你的 Agent 即可直接按下面步骤执行：
 
 ### 给用户与 AI Agent 的四步执行指令
 
@@ -44,15 +54,23 @@
    # ⑤ 服装拟合 + 谐波场权重求解 + 4 极限动作压测
    python run_pipeline.py cloth-rig --body <rigged_body.glb> --garment <garment.glb> --out projects/cloth_rig_demo --max-iters 3
 
-   # ⑥ 视觉标红预览 + 内腔假腿袋智能删面（先 preview 看红区，再 apply 切除）
-   blender -b --python blender_scripts/smart_face_culler.py -- --input <fitted.blend> --out-dir projects/cull_demo --mode preview --target-mode fitted_leg_pouch
+   # ⑥ 通用视觉点选删面与外科平面直切（支持 10x10 网格采图、穿透选面、bisect_plane 直切与暗底线框复检）
+   python run_pipeline.py visual-cull --input <fitted.blend> --out projects/vc_demo --mode capture
+   python run_pipeline.py visual-cull --input <fitted.blend> --out projects/vc_demo --mode bisect --bisect "front_skirt:0.39,0.38->0.39,0.65:drop=right" --bisect "front_skirt:0.61,0.38->0.61,0.65:drop=left" --bisect "front_skirt:0.35,0.385->0.65,0.385:drop=below" --exclude "back:0.0,0.0,1.0,1.0" --bisect-depth-m 0.22
 
-   # ⑦ 汇总 7 项统一实验指标并生成本地记分卡
+   # ⑦ 状态化 Agent 专用修模工作台（类 Blender Edit Mode：三联图 + 推近 + 框选/选连通壳/剥内壁/扩缩选/直切/撤回/清理）
+   python run_pipeline.py surgeon --session projects/sg_demo --action open --input <garment.blend> --view front_skirt --zoom 1.25
+
+   # ⑧ 双科 Agent 练手场（纯程序化出题 + 100 分制自动阅卷，零外部模型依赖）
+   python run_pipeline.py dojo --dojo-dir projects/dojo_surgery --exam surgery --action setup
+   python run_pipeline.py dojo --dojo-dir projects/dojo_retopo --exam retopo_500k --action setup
+
+   # ⑨ 汇总 7 项统一实验指标并生成本地记分卡
    python run_pipeline.py experiments
    ```
 4. **请你的 Agent 接着读完仓内规范文件后再干活**
    - 项目协作规则：[AGENTS.md](AGENTS.md)
-   - 工作流与重拓扑调优参考 Skill：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) 与 [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
+   - 工作流、外科修模工作台与双科练手 SOP：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
 
 ---
 
@@ -92,7 +110,8 @@
 | **闭环重拓扑、布线流光顺与 6 维几何验收** | `python run_pipeline.py retopo` | **已开源 · 已实机验证**（法向守卫 BVH 投影防薄片黑洞 + `refine_quad_flow` 切向光顺 + `sym_max_dev` 细部防断碎自愈；50 万面实测达 `99.8%~99.9%` 纯四边面与 `90%~94%` 标准 4-极点） |
 | **自主 UV 展开与 PBR/AO 烘焙闭环** | `python run_pipeline.py uv-bake` | **已开源 · 已实机验证**（Smart/Hybrid/Conformal 切缝、重叠/拉伸审计、Normal/AO/BaseColor/ORM 烘焙） |
 | **服装拟合、谐波权重求解与 4 极限动作压测** | `python run_pipeline.py cloth-rig` | **已开源 · 已实机验证**（拉普拉斯谐波场 + Lipschitz 梯度松弛 + 5 点跨膜弦细分；束腰 `100.0` 分、长袖多层内裙 `86.36` 分通过 4 极限动作） |
-| **视觉标红预览与内腔智能删面器** | `blender_scripts/smart_face_culler.py` | **已开源 · 已实机验证**（Dry-Run 标红复核 + UV 安全精准切除裙底假腿袋，深蹲/奔跑穿模深度降幅 > 60%） |
+| **视觉点选删面、外科直切与状态化修模工作台** | `visual-cull` / `surgeon` | **已开源 · 已实机验证**（10×10 网格 Face-ID 射线 + 亚像素清扫 + `bisect_plane` 笔直外科直切 + 三联图白模红警内壁/暗底线框 + 快照 `undo`） |
+| **双科 Agent 练手场与自动阅卷器** | `python run_pipeline.py dojo` | **已开源 · 双科 `100/100` 通关验证**（`--exam surgery` 外科删面 + `--exam retopo_500k` 高模四边面重拓扑，纯程序化 0 版权依赖） |
 | **跨任务经验回读与 7 项实验账本** | `knowledge_recall.py` / `experiments` | **已开源 · 读写闭环验证**（启动时回读 `learned_recipes.jsonl` 与 `failure_lessons.jsonl` 动态重排策略先验） |
 | **Stage 0~5 端到端角色编排骨架** | `python run_pipeline.py run --dry-run` | **已开源 · 仅完成 Dry-Run 离线烟测**（各核心 3D 子闭环已真机跑通；全自动串联付费外部 CLI 需用户按 BYOK 自配） |
 | **后续大头演进（AI 高清贴图反投、全角色装配、表情与引擎直出）** | *(后续路线图)* | **持续研发中** |
