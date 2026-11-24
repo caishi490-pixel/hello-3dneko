@@ -20,6 +20,7 @@ from typing import Any
 
 from .config import DEFAULT_BLENDER_EXE, REPO_ROOT, now_iso
 from .experiment_ledger import record_experiment
+from .knowledge_recall import apply_priors_to_candidates, load_strategy_priors
 
 
 INSPECTOR_SCRIPT = REPO_ROOT / "blender_scripts" / "topology_inspector.py"
@@ -29,6 +30,8 @@ DEFAULT_KNOWLEDGE_DIR = REPO_ROOT / "knowledge"
 
 STRATEGY_ROUTES: dict[str, str] = {
     "clean_weld_quadify": "quadify_only_route",
+    "quadriflow_sharp_flow_refine_bake": "quadriflow_route",
+    "quadriflow_smooth_flow_refine_bake": "quadriflow_route",
     "quadriflow_healed_post_clean_bake": "quadriflow_route",
     "quadriflow_healed_sharp_shrink_bake": "quadriflow_route",
     "quadriflow_healed_smooth_shrink_bake": "quadriflow_route",
@@ -65,6 +68,7 @@ class RetopoCriteria:
     max_flipped_normal_pct: float = 2.0
     max_mean_dev_pct: float = 0.85
     max_p95_dev_pct: float = 2.2
+    max_sym_max_dev_pct: float = 5.0
     max_bbox_drift_pct: float = 2.5
     min_bake_coverage: float = 0.94
 
@@ -101,6 +105,7 @@ def agent_decide_repair_plan(
     banned_strategies: set[str],
     criteria: RetopoCriteria,
     banned_routes: set[str] | None = None,
+    knowledge_dir: Path | None = None,
 ) -> tuple[str, list[dict[str, Any]], str]:
     """Select next parameterized repair recipe using Geometry Detector + Rollback Error Analysis."""
     diag = _bbox_diag_from_report(baseline_metrics)
@@ -140,6 +145,90 @@ def agent_decide_repair_plan(
                 "Input already near quad target; run non-destructive seam weld, debris sanitize, and quadify.",
             )
         )
+
+    # Primary flagship strategy: pre-heal + sharp Quadriflow + normal-aware shrinkwrap + tangential quad-flow relaxation + ORM bake
+    candidates.append(
+        (
+            "quadriflow_sharp_flow_refine_bake",
+            prefix_actions
+            + [
+                {"action": "sanitize_mesh", "params": {"weld_seams": True, "min_shell_verts": 48}},
+                {"action": "heal_manifold", "params": {"max_hole_edges": 24}},
+                {
+                    "action": "quadriflow_retopo",
+                    "params": {
+                        "target_faces": target_high,
+                        "use_preserve_sharp": True,
+                        "smooth_normals": False,
+                        "use_mesh_symmetry": False,
+                    },
+                },
+                {
+                    "action": "shrinkwrap_to_reference",
+                    "params": {"offset": 0.0, "normal_aware": True, "min_normal_dot": 0.15, "max_snap_dist_ratio": 0.018},
+                },
+                {
+                    "action": "refine_quad_flow",
+                    "params": {"iterations": 3, "tangential_factor": 0.36, "boundary_factor": 0.24, "reproject": True},
+                },
+                {"action": "sanitize_mesh", "params": {"weld_seams": True, "weld_dist": 2e-4, "min_edge_length": 1e-4, "min_shell_verts": 48}},
+                {"action": "heal_manifold", "params": {"max_hole_edges": 12}},
+                {
+                    "action": "unwrap_and_bake_textures",
+                    "params": {
+                        "texture_size": 2048,
+                        "angle_limit_deg": 86.0,
+                        "island_margin": 0.004,
+                        "cage_extrusion": 0.003,
+                        "max_ray_distance": 0.018,
+                    },
+                },
+            ],
+            "Flagship healed sharp Quadriflow + normal-aware thin-sheet shrinkwrap + tangential quad-flow relaxation + ORM bake.",
+        )
+    )
+
+    # Secondary flagship for slender ribbons/tassels: smooth-normal Quadriflow preserves delicate straps without sharp-edge pinching
+    candidates.append(
+        (
+            "quadriflow_smooth_flow_refine_bake",
+            prefix_actions
+            + [
+                {"action": "sanitize_mesh", "params": {"weld_seams": True, "min_shell_verts": 48}},
+                {"action": "heal_manifold", "params": {"max_hole_edges": 24}},
+                {
+                    "action": "quadriflow_retopo",
+                    "params": {
+                        "target_faces": target_high,
+                        "use_preserve_sharp": False,
+                        "smooth_normals": True,
+                        "use_mesh_symmetry": False,
+                    },
+                },
+                {
+                    "action": "shrinkwrap_to_reference",
+                    "params": {"offset": 0.0, "normal_aware": True, "min_normal_dot": 0.15, "max_snap_dist_ratio": 0.018},
+                },
+                {
+                    "action": "refine_quad_flow",
+                    "params": {"iterations": 3, "tangential_factor": 0.34, "boundary_factor": 0.22, "reproject": True},
+                },
+                {"action": "sanitize_mesh", "params": {"weld_seams": True, "weld_dist": 2e-4, "min_edge_length": 1e-4, "min_shell_verts": 48}},
+                {"action": "heal_manifold", "params": {"max_hole_edges": 12}},
+                {
+                    "action": "unwrap_and_bake_textures",
+                    "params": {
+                        "texture_size": 2048,
+                        "angle_limit_deg": 86.0,
+                        "island_margin": 0.004,
+                        "cage_extrusion": 0.003,
+                        "max_ray_distance": 0.018,
+                    },
+                },
+            ],
+            "Smooth-normal Quadriflow + normal-aware shrinkwrap + tangential quad-flow relaxation (preserves slender ribbons/tassels intact).",
+        )
+    )
 
     # Pre-heal Strategy when Geometry Detector found raw non-manifold/pinholes before Quadriflow
     if non_man > 0 or boundary > 0:
@@ -387,6 +476,10 @@ def agent_decide_repair_plan(
             "High-budget sharp Quadriflow without shrinkwrap + post-retopo sanitize/heal + bake.",
         )
     )
+
+    if knowledge_dir is not None and not attempt_history:
+        priors = load_strategy_priors(knowledge_dir, "retopo")
+        candidates = apply_priors_to_candidates(candidates, priors)
 
     banned_r = banned_routes or set()
     for strat_id, actions, rationale in candidates:
@@ -636,7 +729,12 @@ def run_closed_loop_retopo(
     for it in range(1, max_iterations + 1):
         try:
             strat_id, actions, rationale = agent_decide_repair_plan(
-                baseline_metrics, attempt_history, banned, criteria, banned_routes=banned_routes
+                baseline_metrics,
+                attempt_history,
+                banned,
+                criteria,
+                banned_routes=banned_routes,
+                knowledge_dir=kdir,
             )
         except RuntimeError as exc:
             best_score = best_attempt["score"] if best_attempt else 0.0

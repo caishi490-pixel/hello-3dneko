@@ -1,13 +1,13 @@
 # Hello 3DNeko (`hello-3dneko`)
 
-AI Agent 驱动的二次元 / 风格化 3D 角色工作流与**闭环自主重拓扑 (`retopo`)** 开源框架。通过跨进程无头调度，将 2D 三视图生成规范、基准素模结构分析、阶段流水线编排骨架与 **6 维独立几何验收闭环自动重拓扑引擎**串联为可审计、可回滚的开源基础底座。
+**确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色与服装开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
 
 > [!IMPORTANT]
-> **关于开源范围与知识产权声明（必读）**
+> **关于架构定位与开源范围声明（务实说明）**
 >
-> 1. **开源截止边界**：本公开仓库**仅开源至 Agent 闭环自动重拓扑（`retopo`）阶段及前置基础框架**。
-> 2. **后续功能暂不开源**：重拓扑之后的下游闭环流程（包括但不限于自主 UV 展开与 PBR/AO 烘焙闭环、服装拟合与自动骨骼权重/布料物理求解及姿态压测、多资产自动组装、游戏引擎工程直出等）**目前尚未完成全量充分验证，暂不开源**。
-> 3. **刻意阉割声明与产权归属**：当前公开版本为**经过刻意功能裁剪（阉割）的开源版本**。上述未开源及已裁剪移除的后续模块、高阶多目标决策算法与私有调参经验库均属于项目发起人的**独立知识产权与专有技术成果（Proprietary IP）**，保留用于后续内部验证、商业版本及定制技术服务，不包含在本次开源代码许可范围之内。
+> 1. **确定性闭环 + 外部多模态 Agent 分工**：仓内闭环脚本（`retopo` / `uv-bake` / `cloth-rig`）采用**确定性几何检测 + 跨任务历史经验回读（`knowledge_recall.py` 读取 `learned_recipes.jsonl` / `failure_lessons.jsonl`）**驱动策略排序与失败回滚，本地运行零隐式 LLM 费用；视觉看图审阅与新算法迭代由外部多模态 Agent 负责。
+> 2. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**服装拟合与谐波权重 (`cloth-rig`)**、**内腔假腿袋智能删面 (`smart_face_culler.py`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
+> 3. **后续演进方向**：更高阶的 AI 贴图高清化多视角反投、整套角色多部件装配、表情 BlendShape 与游戏引擎直出等大头能力仍在持续研发中。
 
 ---
 
@@ -27,7 +27,7 @@ AI Agent 驱动的二次元 / 风格化 3D 角色工作流与**闭环自主重�
    ```powershell
    python -m unittest discover -s tests -p "test_*.py" -v
    ```
-3. **运行基础工作流编排与闭环 Agent 重拓扑（`retopo`）**
+3. **运行闭环重拓扑、UV 烘焙、服装权重拟合与智能删面**
    ```powershell
    # ① 初始化一个角色工作区
    python run_pipeline.py init --id neko_demo --name "Demo Character" --brief "Cel-shaded anime character in 40-deg open A-pose"
@@ -35,16 +35,24 @@ AI Agent 驱动的二次元 / 风格化 3D 角色工作流与**闭环自主重�
    # ② 预演前置全链路状态机（Dry-Run 不产生任何付费调用）
    python run_pipeline.py run --project projects/neko_demo --dry-run
 
-   # ③ 核心能力：闭环 Agent 自动重拓扑 + 6 维独立几何验收 + 失败自动回滚与路线切换
+   # ③ 闭环重拓扑 + 法向守卫贴合 + 切向四边面流光顺 + 6 维验收（含细部防断碎自愈）
    python run_pipeline.py retopo --input <raw_model.glb> --out projects/retopo_demo --max-iters 5
 
-   # ④ 汇总 7 项统一实验指标并生成本地记分卡
+   # ④ 自主 UV 展开与 PBR/AO 烘焙闭环
+   python run_pipeline.py uv-bake --high <high.glb> --low <low.blend> --out projects/uv_bake_demo --max-iters 4
+
+   # ⑤ 服装拟合 + 谐波场权重求解 + 4 极限动作压测
+   python run_pipeline.py cloth-rig --body <rigged_body.glb> --garment <garment.glb> --out projects/cloth_rig_demo --max-iters 3
+
+   # ⑥ 视觉标红预览 + 内腔假腿袋智能删面（先 preview 看红区，再 apply 切除）
+   blender -b --python blender_scripts/smart_face_culler.py -- --input <fitted.blend> --out-dir projects/cull_demo --mode preview --target-mode fitted_leg_pouch
+
+   # ⑦ 汇总 7 项统一实验指标并生成本地记分卡
    python run_pipeline.py experiments
    ```
 4. **请你的 Agent 接着读完仓内规范文件后再干活**
    - 项目协作规则：[AGENTS.md](AGENTS.md)
    - 工作流与重拓扑调优参考 Skill：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) 与 [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
-   - **给 Agent 的防幻觉提示**：本开源仓库只开放至 `retopo` 与 `experiments`；请勿假定或捏造后续未开源的 `uv-bake` / `cloth-rig` 等商业/专有模块命令。
 
 ---
 
@@ -80,11 +88,14 @@ AI Agent 驱动的二次元 / 风格化 3D 角色工作流与**闭环自主重�
 
 | 模块 / 能力 | CLI 命令 | 当前开源与验证状态 |
 | :--- | :--- | :--- |
-| **项目初始化、密钥熔断守护与 UV 像素审计** | `init` / `status` / `inspect-uv` | **已开源 · 离线测试通过**（含 `guards.py` 零自动重试与熔断锁） |
-| **闭环 Agent 自动重拓扑与 6 维几何验收** | `python run_pipeline.py retopo` | **已开源 · 已实现并实机验证**（流形修补、Quadriflow / Adaptive Voxel 路线切换、失败快照回滚） |
-| **统一 7 项实验指标账本** | `python run_pipeline.py experiments` | **已开源 · 已实现并实机验证**（记录自主完成率、人工干预、返工次数、耗时、评分、失败原因、配置哈希） |
-| **Stage 0~5 阶段编排骨架与模版** | `python run_pipeline.py run --dry-run` | **已开源 · 仅完成 Dry-Run 离线烟测**（用于接入用户自带 2D/3D 工具链，实机端到端付费链路待各自按需联调） |
-| **重拓扑之后流程（自主 UV/烘焙、服装拟合与权重绑定、场景组装、引擎直出等）** | *(本版已刻意阉割移除)* | **未充分验证 · 暂不开源（属项目发起人知识产权与后续商业/定制演进部分）** |
+| **项目初始化、密钥熔断守护与 UV 像素审计** | `init` / `status` / `inspect-uv` | **已开源 · 测试通过**（含 `guards.py` 零自动重试与熔断锁） |
+| **闭环重拓扑、布线流光顺与 6 维几何验收** | `python run_pipeline.py retopo` | **已开源 · 已实机验证**（法向守卫 BVH 投影防薄片黑洞 + `refine_quad_flow` 切向光顺 + `sym_max_dev` 细部防断碎自愈；50 万面实测达 `99.8%~99.9%` 纯四边面与 `90%~94%` 标准 4-极点） |
+| **自主 UV 展开与 PBR/AO 烘焙闭环** | `python run_pipeline.py uv-bake` | **已开源 · 已实机验证**（Smart/Hybrid/Conformal 切缝、重叠/拉伸审计、Normal/AO/BaseColor/ORM 烘焙） |
+| **服装拟合、谐波权重求解与 4 极限动作压测** | `python run_pipeline.py cloth-rig` | **已开源 · 已实机验证**（拉普拉斯谐波场 + Lipschitz 梯度松弛 + 5 点跨膜弦细分；束腰 `100.0` 分、长袖多层内裙 `86.36` 分通过 4 极限动作） |
+| **视觉标红预览与内腔智能删面器** | `blender_scripts/smart_face_culler.py` | **已开源 · 已实机验证**（Dry-Run 标红复核 + UV 安全精准切除裙底假腿袋，深蹲/奔跑穿模深度降幅 > 60%） |
+| **跨任务经验回读与 7 项实验账本** | `knowledge_recall.py` / `experiments` | **已开源 · 读写闭环验证**（启动时回读 `learned_recipes.jsonl` 与 `failure_lessons.jsonl` 动态重排策略先验） |
+| **Stage 0~5 端到端角色编排骨架** | `python run_pipeline.py run --dry-run` | **已开源 · 仅完成 Dry-Run 离线烟测**（各核心 3D 子闭环已真机跑通；全自动串联付费外部 CLI 需用户按 BYOK 自配） |
+| **后续大头演进（AI 高清贴图反投、全角色装配、表情与引擎直出）** | *(后续路线图)* | **持续研发中** |
 
 ---
 

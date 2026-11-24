@@ -274,6 +274,27 @@ def inspect_mesh_object(mesh_obj, debris_max_verts=24):
     welded_v = max(1, len(bm_w.verts))
     val4_ratio = round(val_hist.get(4, 0) / welded_v, 4)
 
+    # Quad flow regularity: orthogonality (90-deg corner closeness) & clustered non-valence-4 pole ratio
+    ortho_scores = []
+    for f in bm_w.faces:
+        if len(f.verts) != 4:
+            continue
+        f_angles = [lp.calc_angle() for lp in f.loops]
+        if len(f_angles) == 4:
+            err = sum(abs(a - (math.pi * 0.5)) for a in f_angles) / (4.0 * (math.pi * 0.5))
+            ortho_scores.append(max(0.0, 1.0 - err))
+    quad_orthogonality_mean = round(sum(ortho_scores) / len(ortho_scores), 4) if ortho_scores else 0.0
+
+    interior_poles = {
+        v.index for v in bm_w.verts if len(v.link_edges) != 4 and not v.is_boundary
+    }
+    clustered_poles = 0
+    for v in bm_w.verts:
+        if v.index in interior_poles:
+            if any(e.other_vert(v).index in interior_poles for e in v.link_edges):
+                clustered_poles += 1
+    pole_cluster_pct = round(100.0 * clustered_poles / welded_v, 2)
+
     # Normal consistency check: recalc normals on copy and count flips
     pre_normals = [f.normal.copy() for f in bm_w.faces]
     bmesh.ops.recalc_face_normals(bm_w, faces=bm_w.faces[:])
@@ -344,6 +365,8 @@ def inspect_mesh_object(mesh_obj, debris_max_verts=24):
         "bad_aspect_faces": bad_aspect,
         "flipped_normals_estimate": flipped_normals,
         "welded_valence4_ratio": val4_ratio,
+        "quad_orthogonality_mean": quad_orthogonality_mean,
+        "pole_cluster_pct": pole_cluster_pct,
         "unnormalized_weight_verts": unnormalized_weights,
         "zero_weight_verts": zero_weight_verts,
         "dims": dims,

@@ -231,7 +231,8 @@ class PipelineSmokeTests(unittest.TestCase):
                 {"quadriflow_direct_shrink_bake"},
                 RetopoCriteria(),
             )
-            self.assertEqual(strat, "quadriflow_smooth_post_clean_bake")
+            self.assertEqual(strat, "quadriflow_sharp_flow_refine_bake")
+            self.assertTrue(any(a["action"] == "refine_quad_flow" for a in actions))
             self.assertTrue(any(a["action"] == "unwrap_and_bake_textures" for a in actions))
 
             cli_proc = subprocess.run(
@@ -269,16 +270,17 @@ class PipelineSmokeTests(unittest.TestCase):
                 "meshes": [{"faces_raw": 500000, "raw_quad_ratio": 0.0, "dims": [1.0, 1.0, 1.0]}],
             }
 
-            # 1b. high_surface_deviation escalates directly to quadriflow_healed_sharp_shrink_bake
+            # 1b. high_surface_deviation escalates from sharp-flow to smooth-flow when sharp-flow is banned
             strat_dev, dev_actions, _ = agent_decide_repair_plan(
                 baseline,
                 [{"error_analysis": {"failure_classes": ["high_surface_deviation"]}}],
-                {"quadriflow_healed_post_clean_bake"},
+                {"quadriflow_sharp_flow_refine_bake", "quadriflow_healed_post_clean_bake"},
                 RetopoCriteria(),
             )
-            self.assertEqual(strat_dev, "quadriflow_healed_sharp_shrink_bake")
+            self.assertEqual(strat_dev, "quadriflow_smooth_flow_refine_bake")
             self.assertEqual(get_strategy_route(strat_dev), "quadriflow_route")
             self.assertTrue(any(a["action"] == "shrinkwrap_to_reference" for a in dev_actions))
+            self.assertTrue(any(a["action"] == "refine_quad_flow" for a in dev_actions))
 
             # 1. TOTAL_FAILURE on a route forces switching to a distinct algorithm route
             strat_switched, voxel_actions, _ = agent_decide_repair_plan(
@@ -362,16 +364,57 @@ class PipelineSmokeTests(unittest.TestCase):
             self.assertTrue((root / "w_tot" / "route_pivot_recommendation.json").is_file())
             self.assertTrue((kdir / "route_pivots.jsonl").is_file())
 
-    def test_retopo_experiment_ledger_and_cli(self) -> None:
+    def test_uv_bake_loop_rollback_cli_and_experiment_ledger(self) -> None:
         from pipeline.experiment_ledger import compute_ledger_summary, load_experiments, record_experiment
+        from pipeline.uv_bake_agent_loop import (
+            UVBakeCriteria,
+            agent_decide_uv_bake_plan,
+            analyze_uv_failure_and_rollback,
+            get_uv_strategy_route,
+        )
 
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
+            pre = root / "pre.blend"
+            active = root / "active.blend"
+            pre.write_bytes(b"CLEAN_UV_PRE")
+            active.write_bytes(b"BAD_UV_OVP")
+
+            diag = analyze_uv_failure_and_rollback(
+                pre,
+                active,
+                "seam_angle_conformal_tight_bake",
+                toolkit_ok=True,
+                toolkit_log="",
+                verdict={
+                    "passed": False,
+                    "score": 33.33,
+                    "blocking_failures": [
+                        "UVOverlap: overlap_area=15.5% > 0.8%",
+                        "BakeAOBlackout: ao_blackout=31.5% > 10.0%",
+                    ],
+                },
+            )
+            self.assertEqual(active.read_bytes(), b"CLEAN_UV_PRE")
+            self.assertIn("uv_overlap", diag["failure_classes"])
+            self.assertIn("bake_blackout", diag["failure_classes"])
+
+            baseline = {"meshes": [{"dims": [1.0, 0.8, 1.8]}]}
+            strat, actions, _ = agent_decide_uv_bake_plan(
+                baseline,
+                [{"error_analysis": diag}],
+                {"seam_angle_conformal_tight_bake"},
+                UVBakeCriteria(),
+            )
+            self.assertEqual(strat, "hybrid_seams_conformal_tight_bake")
+            self.assertEqual(get_uv_strategy_route(strat), "hybrid_unwrap_route")
+            self.assertTrue(any(a["action"] == "bake_pbr_maps" and a["params"].get("use_cage") for a in actions))
+
             kdir = root / "knowledge"
             record_experiment(
                 kdir,
-                task_type="retopo",
-                asset="corset.glb",
+                task_type="uv_bake",
+                asset="corset.blend",
                 work_dir=root / "w1",
                 autonomous_completed=True,
                 human_interventions=0,
@@ -379,7 +422,7 @@ class PipelineSmokeTests(unittest.TestCase):
                 elapsed_seconds=106.2,
                 final_score=100.0,
                 passed=True,
-                winning_strategy_id="quadriflow_smooth_post_clean_bake",
+                winning_strategy_id="smart_project_packed_tight_bake",
                 seed=42,
             )
             rows = load_experiments(kdir)
@@ -388,6 +431,30 @@ class PipelineSmokeTests(unittest.TestCase):
             summary = compute_ledger_summary(rows)
             self.assertEqual(summary["autonomous_completion_rate_pct"], 100.0)
             self.assertTrue((kdir / "EXPERIMENT_SCORECARD.md").is_file())
+
+            hi = root / "high.glb"
+            lo = root / "low.glb"
+            hi.write_bytes(b"glTF")
+            lo.write_bytes(b"glTF")
+            uv_proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "run_pipeline.py"),
+                    "uv-bake",
+                    "--high",
+                    str(hi),
+                    "--low",
+                    str(lo),
+                    "--out",
+                    str(root / "cli_uvb"),
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(uv_proc.returncode, 0, msg=uv_proc.stderr)
+            self.assertEqual(json.loads(uv_proc.stdout)["status"], "dry_run")
 
             exp_proc = subprocess.run(
                 [
@@ -403,6 +470,83 @@ class PipelineSmokeTests(unittest.TestCase):
             )
             self.assertEqual(exp_proc.returncode, 0, msg=exp_proc.stderr)
             self.assertEqual(json.loads(exp_proc.stdout)["summary"]["total_runs"], 1)
+
+    def test_cloth_rig_planner_rollback_and_cli_dry_run(self) -> None:
+        from pipeline.cloth_rig_agent_loop import (  # noqa: E402
+            ClothRigCriteria,
+            agent_decide_cloth_rig_plan,
+            get_cloth_strategy_route,
+        )
+
+        # Corset clean path -> surface_polyinterp_clean_fit
+        insp_corset = {
+            "garment_analysis": {
+                "garment_type": "waist_corset_belt",
+                "has_sleeves": False,
+                "has_offcenter_lower_pendulum": True,
+            }
+        }
+        s1, a1, _ = agent_decide_cloth_rig_plan(insp_corset, [], set(), ClothRigCriteria())
+        self.assertEqual(s1, "surface_polyinterp_clean_fit")
+        self.assertEqual(get_cloth_strategy_route(s1), "surface_transfer_clean_route")
+        self.assertTrue(any(act["action"] == "match_pose_and_fit" for act in a1))
+
+        # Blocking clipping/overstretch promotes proxy hull analytical route when surface route is banned
+        insp_dress = {
+            "garment_analysis": {
+                "garment_type": "full_dress",
+                "has_sleeves": True,
+                "has_offcenter_lower_pendulum": False,
+            }
+        }
+        fail_hist = [
+            {
+                "error_analysis": {
+                    "failure_classes": ["pose_body_clipping", "skinning_spike"],
+                }
+            }
+        ]
+        s2, a2, _ = agent_decide_cloth_rig_plan(
+            insp_dress,
+            fail_hist,
+            {"surface_polyinterp_clean_fit"},
+            ClothRigCriteria(),
+            banned_routes={"surface_transfer_clean_route"},
+        )
+        self.assertEqual(s2, "inflated_proxy_capsule_transfer")
+        self.assertEqual(get_cloth_strategy_route(s2), "proxy_hull_skirt_route")
+        self.assertTrue(
+            any(act["action"] == "repair_weight_anomalies" and act["params"].get("skirt_analytical_field") for act in a2)
+        )
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            body = root / "body.glb"
+            garm = root / "dress.glb"
+            body.write_bytes(b"glTF")
+            garm.write_bytes(b"glTF")
+            proc = subprocess.run(
+                [
+                    sys.executable,
+                    str(REPO_ROOT / "run_pipeline.py"),
+                    "cloth-rig",
+                    "--body",
+                    str(body),
+                    "--garment",
+                    str(garm),
+                    "--out",
+                    str(root / "cloth_dry"),
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(proc.returncode, 0, msg=proc.stderr)
+            payload = json.loads(proc.stdout)
+            self.assertEqual(payload["status"], "dry_run")
+            self.assertEqual(payload["strategy_id"], "surface_polyinterp_clean_fit")
+            self.assertEqual(payload["route_family"], "surface_transfer_clean_route")
 
     def test_repo_hygiene_no_private_paths_secrets_or_gpl_boundary_leak(self) -> None:
         """Gate against personal OS paths, credential file pointers, non-original refs, and bpy leakage."""
@@ -468,22 +612,132 @@ class PipelineSmokeTests(unittest.TestCase):
         for req_rule in ("projects/", "*.glb", "*.blend", ".env", "knowledge/*.jsonl"):
             self.assertIn(req_rule, gi_text)
 
-        # Verify withheld proprietary post-retopo modules are not bundled in this open-source cut
-        withheld_relpaths = (
-            "pipeline/uv_bake_agent_loop.py",
-            "blender_scripts/uv_bake_toolkit.py",
-            "blender_scripts/uv_bake_validator.py",
-            "pipeline/cloth_rig_agent_loop.py",
-            "blender_scripts/cloth_rig_inspector.py",
-            "blender_scripts/cloth_rig_toolkit.py",
-            "blender_scripts/cloth_rig_validator.py",
-        )
-        for rel in withheld_relpaths:
-            self.assertFalse((REPO_ROOT / rel).exists(), msg=f"Withheld proprietary module present in OSS cut: {rel}")
+    def test_knowledge_recall_actually_reorders_planners_from_jsonl(self) -> None:
+        from pipeline.cloth_rig_agent_loop import ClothRigCriteria, agent_decide_cloth_rig_plan
+        from pipeline.topology_agent_loop import RetopoCriteria, agent_decide_repair_plan
+        from pipeline.uv_bake_agent_loop import UVBakeCriteria, agent_decide_uv_bake_plan
 
-        readme_text = (REPO_ROOT / "README.md").read_text(encoding="utf-8")
-        for req_heading in ("## 如何使用", "知识产权", "暂不开源"):
-            self.assertIn(req_heading, readme_text)
+        with tempfile.TemporaryDirectory() as td:
+            kdir = Path(td) / "knowledge"
+            kdir.mkdir(parents=True, exist_ok=True)
+            (kdir / "learned_recipes.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"task_type": "retopo", "strategy_id": "quadriflow_smooth_flow_refine_bake", "score": 100.0}),
+                        json.dumps({"task_type": "uv_bake", "strategy_id": "smart_project_packed_tight_bake", "score": 100.0}),
+                        json.dumps({"task_type": "cloth_rig", "strategy_id": "inflated_proxy_capsule_transfer", "score": 98.0, "garment_type": "full_dress"}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            (kdir / "failure_lessons.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"task_type": "retopo", "banned_strategy": "quadriflow_sharp_flow_refine_bake"}),
+                        json.dumps({"task_type": "retopo", "banned_strategy": "quadriflow_sharp_flow_refine_bake"}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            retopo_base = {"junk_objects": [], "total_faces_raw": 500000, "meshes": [{"faces_raw": 500000, "raw_quad_ratio": 0.0, "dims": [1.0, 1.0, 1.0]}]}
+            r_sid, _, r_rat = agent_decide_repair_plan(retopo_base, [], set(), RetopoCriteria(), knowledge_dir=kdir)
+            self.assertEqual(r_sid, "quadriflow_smooth_flow_refine_bake")
+            self.assertIn("Knowledge Recall", r_rat)
+
+            uv_base = {"meshes": [{"dims": [1.0, 1.0, 1.0]}]}
+            u_sid, _, u_rat = agent_decide_uv_bake_plan(uv_base, [], set(), UVBakeCriteria(), knowledge_dir=kdir)
+            self.assertEqual(u_sid, "smart_project_packed_tight_bake")
+            self.assertIn("Knowledge Recall", u_rat)
+
+            cloth_insp = {"garment_analysis": {"garment_type": "full_dress"}}
+            c_sid, _, c_rat = agent_decide_cloth_rig_plan(cloth_insp, [], set(), ClothRigCriteria(), knowledge_dir=kdir)
+            self.assertEqual(c_sid, "inflated_proxy_capsule_transfer")
+            self.assertIn("Knowledge Recall", c_rat)
+
+    def test_live_blender_geometry_flow_and_culler_regression(self) -> None:
+        """Real headless Blender regression test on a procedural synthetic 3D mesh (zero external private assets)."""
+        import shutil
+        from pipeline.config import DEFAULT_BLENDER_EXE
+
+        blender_bin = DEFAULT_BLENDER_EXE if Path(DEFAULT_BLENDER_EXE).is_file() else (shutil.which(DEFAULT_BLENDER_EXE) or "")
+        if not blender_bin:
+            self.skipTest("Blender executable not installed in this environment.")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            gen_script = root / "make_synthetic_mesh.py"
+            raw_glb = root / "synthetic_garment.glb"
+            gen_script.write_text(
+                "\n".join(
+                    [
+                        "import bpy, bmesh, sys",
+                        "out_glb = sys.argv[sys.argv.index('--') + 1]",
+                        "bpy.ops.wm.read_factory_settings(use_empty=True)",
+                        "bpy.ops.mesh.primitive_uv_sphere_add(segments=24, ring_count=16, radius=0.45)",
+                        "obj = bpy.context.active_object",
+                        "obj.name = 'SyntheticGarment'",
+                        "bpy.ops.export_scene.gltf(filepath=out_glb, export_format='GLB')",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            p_gen = subprocess.run([blender_bin, "-b", "--python-exit-code", "1", "--python", str(gen_script), "--", str(raw_glb)], capture_output=True, text=True, check=False)
+            self.assertEqual(p_gen.returncode, 0, msg=p_gen.stderr)
+            self.assertTrue(raw_glb.is_file())
+
+            # 1. Run topology_inspector.py on the real GLB and verify quad_orthogonality_mean & pole_cluster_pct
+            insp_json = root / "inspect.json"
+            p_insp = subprocess.run(
+                [blender_bin, "-b", "--python-exit-code", "1", "--python", str(REPO_ROOT / "blender_scripts" / "topology_inspector.py"), "--", "--input", str(raw_glb), "--out-json", str(insp_json)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_insp.returncode, 0, msg=p_insp.stderr)
+            insp_data = json.loads(insp_json.read_text(encoding="utf-8"))
+            self.assertEqual(len(insp_data["meshes"]), 1)
+            self.assertIn("quad_orthogonality_mean", insp_data["meshes"][0])
+            self.assertIn("pole_cluster_pct", insp_data["meshes"][0])
+
+            # 2. Run topology_toolkit.py with normal-aware shrinkwrap + refine_quad_flow
+            plan_path = root / "plan.json"
+            out_blend = root / "refined.blend"
+            out_glb = root / "refined.glb"
+            exec_log = root / "exec_log.json"
+            plan_path.write_text(
+                json.dumps(
+                    {
+                        "input_path": str(raw_glb),
+                        "reference_glb": str(raw_glb),
+                        "textures_dir": str(root / "tex"),
+                        "output_blend": str(out_blend),
+                        "output_glb": str(out_glb),
+                        "execution_log": str(exec_log),
+                        "actions": [
+                            {"action": "weld_and_quadify", "params": {"weld_dist": 1e-4}},
+                            {"action": "shrinkwrap_to_reference", "params": {"offset": 0.0, "normal_aware": True}},
+                            {"action": "refine_quad_flow", "params": {"iterations": 2, "tangential_factor": 0.3, "reproject": True}},
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            p_tk = subprocess.run(
+                [blender_bin, "-b", "--python-exit-code", "1", "--python", str(REPO_ROOT / "blender_scripts" / "topology_toolkit.py"), "--", "--plan", str(plan_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(p_tk.returncode, 0, msg=p_tk.stderr)
+            self.assertTrue(out_blend.is_file())
+            self.assertTrue(out_glb.is_file())
+            tk_rep = json.loads(exec_log.read_text(encoding="utf-8"))
+            self.assertEqual(tk_rep["status"], "executed")
+            self.assertTrue(tk_rep["steps"][1]["result"]["normal_aware"])
+            self.assertEqual(tk_rep["steps"][2]["action"], "refine_quad_flow")
 
 
 if __name__ == "__main__":

@@ -11,6 +11,7 @@ import bmesh
 import bpy
 import numpy as np
 from mathutils import Vector, kdtree
+from mathutils.bvhtree import BVHTree
 
 
 def _parse_args():
@@ -598,25 +599,186 @@ def _import_temp_reference(ref_path):
     return joined, [o for o in bpy.context.scene.objects if o.as_pointer() not in before_ptrs]
 
 
+def _build_world_bvh(obj):
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bmesh.ops.transform(bm, matrix=obj.matrix_world, verts=bm.verts)
+    bm.normal_update()
+    pts = [v.co for v in bm.verts]
+    if pts:
+        min_v = Vector((min(p.x for p in pts), min(p.y for p in pts), min(p.z for p in pts)))
+        max_v = Vector((max(p.x for p in pts), max(p.y for p in pts), max(p.z for p in pts)))
+        diag = max(1e-4, (max_v - min_v).length)
+    else:
+        diag = 1.0
+    bvh = BVHTree.FromBMesh(bm)
+    bm.free()
+    return bvh, diag
+
+
+def _normal_aware_snap_bm(bm, mw, mw_inv, ref_bvh, ref_diag, offset=0.0, min_normal_dot=0.15, max_snap_dist_ratio=0.018):
+    """Project vertices onto reference surface while rejecting opposite-side hits on thin double-sided cloth/frills."""
+    bm.normal_update()
+    max_dist = max(1e-4, ref_diag * float(max_snap_dist_ratio))
+    rot_m = mw.to_3x3().normalized()
+    stats = {"snapped_nearest": 0, "snapped_ray_same_side": 0, "skipped_opposite_or_far": 0}
+    for v in bm.verts:
+        p_w = mw @ v.co
+        n_w = (rot_m @ v.normal)
+        if n_w.length > 1e-8:
+            n_w.normalize()
+        else:
+            n_w = Vector((0.0, 0.0, 1.0))
+
+        loc, hit_n, _, dist = ref_bvh.find_nearest(p_w, max_dist)
+        if loc is not None and hit_n is not None and hit_n.dot(n_w) >= min_normal_dot:
+            v.co = mw_inv @ (loc + hit_n.normalized() * offset)
+            stats["snapped_nearest"] += 1
+            continue
+
+        # Nearest surface point belonged to opposite face of thin sheet or was too far -> cast bidirectional same-side ray
+        best_hit = None
+        for sign in (1.0, -1.0):
+            ray_dir = n_w * sign
+            h_loc, h_n, _, h_dist = ref_bvh.ray_cast(p_w - ray_dir * (max_dist * 0.15), ray_dir, max_dist * 1.15)
+            if h_loc is not None and h_n is not None and h_n.dot(n_w) >= min_normal_dot:
+                actual_d = (h_loc - p_w).length
+                if actual_d <= max_dist and (best_hit is None or actual_d < best_hit[0]):
+                    best_hit = (actual_d, h_loc, h_n)
+        if best_hit is not None:
+            _, h_loc, h_n = best_hit
+            v.co = mw_inv @ (h_loc + h_n.normalized() * offset)
+            stats["snapped_ray_same_side"] += 1
+        else:
+            stats["skipped_opposite_or_far"] += 1
+    return stats
+
+
 def action_shrinkwrap_to_reference(params, reference_glb):
-    """Snap retopologized vertices tightly onto original untouched high-poly surface."""
+    """Snap retopologized vertices tightly onto original untouched high-poly surface without thin-sheet punch-through."""
     if not reference_glb or not Path(reference_glb).is_file():
         raise FileNotFoundError(f"Missing reference_glb for shrinkwrap: {reference_glb}")
+    normal_aware = bool(params.get("normal_aware", True))
+    offset = float(params.get("offset", 0.0))
+    min_normal_dot = float(params.get("min_normal_dot", 0.15))
+    max_snap_dist_ratio = float(params.get("max_snap_dist_ratio", 0.018))
     cand_meshes = _get_primary_meshes()
     ref_obj, imported = _import_temp_reference(reference_glb)
     try:
+        if normal_aware:
+            ref_bvh, ref_diag = _build_world_bvh(ref_obj)
+            summary = []
+            for obj in cand_meshes:
+                bm = bmesh.new()
+                bm.from_mesh(obj.data)
+                st = _normal_aware_snap_bm(
+                    bm,
+                    obj.matrix_world,
+                    obj.matrix_world.inverted(),
+                    ref_bvh,
+                    ref_diag,
+                    offset=offset,
+                    min_normal_dot=min_normal_dot,
+                    max_snap_dist_ratio=max_snap_dist_ratio,
+                )
+                bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+                bm.to_mesh(obj.data)
+                bm.free()
+                for p in obj.data.polygons:
+                    p.use_smooth = True
+                obj.data.update()
+                summary.append({"mesh": obj.name, **st})
+            return {"shrinkwrapped_to": str(reference_glb), "normal_aware": True, "details": summary}
+
         for obj in cand_meshes:
             _set_active_object(obj)
             mod = obj.modifiers.new("AgentShrinkwrap", "SHRINKWRAP")
             mod.target = ref_obj
             mod.wrap_method = "NEAREST_SURFACEPOINT"
             mod.wrap_mode = "ON_SURFACE"
-            mod.offset = float(params.get("offset", 0.0))
+            mod.offset = offset
             bpy.ops.object.modifier_apply(modifier=mod.name)
             bpy.ops.object.mode_set(mode="EDIT")
             bpy.ops.mesh.normals_make_consistent(inside=False)
             bpy.ops.object.mode_set(mode="OBJECT")
-        return {"shrinkwrapped_to": str(reference_glb)}
+        return {"shrinkwrapped_to": str(reference_glb), "normal_aware": False}
+    finally:
+        for o in imported:
+            if o.name in bpy.data.objects:
+                bpy.data.objects.remove(o, do_unlink=True)
+
+
+def action_refine_quad_flow(params, reference_glb):
+    """Tangential Laplacian quad-flow relaxation + boundary loop smoothing + normal-aware reference reprojection."""
+    iterations = int(params.get("iterations", 3))
+    tangential_factor = float(params.get("tangential_factor", 0.36))
+    boundary_factor = float(params.get("boundary_factor", 0.24))
+    reproject = bool(params.get("reproject", True)) and bool(reference_glb and Path(reference_glb).is_file())
+    min_normal_dot = float(params.get("min_normal_dot", 0.15))
+    max_snap_dist_ratio = float(params.get("max_snap_dist_ratio", 0.015))
+
+    cand_meshes = _get_primary_meshes()
+    ref_obj = None
+    imported = []
+    ref_bvh = None
+    ref_diag = 1.0
+    if reproject:
+        ref_obj, imported = _import_temp_reference(reference_glb)
+        ref_bvh, ref_diag = _build_world_bvh(ref_obj)
+
+    try:
+        summary = []
+        for obj in cand_meshes:
+            bm = bmesh.new()
+            bm.from_mesh(obj.data)
+            mw = obj.matrix_world
+            mw_inv = mw.inverted()
+            snap_totals = {"snapped_nearest": 0, "snapped_ray_same_side": 0, "skipped_opposite_or_far": 0}
+
+            for _ in range(max(1, iterations)):
+                bm.normal_update()
+                new_coords = {}
+                for v in bm.verts:
+                    if not v.link_edges:
+                        continue
+                    if v.is_boundary:
+                        b_nbrs = [e.other_vert(v).co for e in v.link_edges if e.is_boundary]
+                        if len(b_nbrs) == 2:
+                            avg = (b_nbrs[0] + b_nbrs[1]) * 0.5
+                            new_coords[v] = v.co.lerp(avg, boundary_factor)
+                    else:
+                        nbrs = [e.other_vert(v).co for e in v.link_edges]
+                        avg = sum(nbrs, Vector((0.0, 0.0, 0.0))) / len(nbrs)
+                        delta = avg - v.co
+                        n = v.normal
+                        if n.length > 1e-8:
+                            delta = delta - n * delta.dot(n)
+                        new_coords[v] = v.co + delta * tangential_factor
+                for v, co in new_coords.items():
+                    v.co = co
+
+                if ref_bvh is not None:
+                    st = _normal_aware_snap_bm(
+                        bm,
+                        mw,
+                        mw_inv,
+                        ref_bvh,
+                        ref_diag,
+                        offset=0.0,
+                        min_normal_dot=min_normal_dot,
+                        max_snap_dist_ratio=max_snap_dist_ratio,
+                    )
+                    for k in snap_totals:
+                        snap_totals[k] += st[k]
+
+            bmesh.ops.recalc_face_normals(bm, faces=bm.faces[:])
+            bm.to_mesh(obj.data)
+            bm.free()
+            for p in obj.data.polygons:
+                p.use_smooth = True
+            obj.data.update()
+            summary.append({"mesh": obj.name, "iterations": iterations, "reproject": reproject, **snap_totals})
+        return {"refined_quad_flow": summary}
     finally:
         for o in imported:
             if o.name in bpy.data.objects:
@@ -894,6 +1056,7 @@ ACTION_DISPATCH = {
     "quadriflow_retopo": lambda p, ctx: action_quadriflow_retopo(p),
     "decimate_and_quadify": lambda p, ctx: action_decimate_and_quadify(p),
     "shrinkwrap_to_reference": lambda p, ctx: action_shrinkwrap_to_reference(p, ctx["reference_glb"]),
+    "refine_quad_flow": lambda p, ctx: action_refine_quad_flow(p, ctx["reference_glb"]),
     "unwrap_and_bake_textures": lambda p, ctx: action_unwrap_and_bake_textures(
         p, ctx["reference_glb"], ctx["textures_dir"]
     ),

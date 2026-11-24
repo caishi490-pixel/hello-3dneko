@@ -27,7 +27,7 @@ def _parse_args():
     return p.parse_args(argv)
 
 
-def _render_qc_views(out_dir, prefix="cand", samples=28, res=768):
+def _render_qc_views(out_dir, prefix="cand", samples=28, res=768, mode="both"):
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     sc = bpy.context.scene
@@ -48,7 +48,8 @@ def _render_qc_views(out_dir, prefix="cand", samples=28, res=768):
 
     w = bpy.data.worlds.new("QCWorld")
     sc.world = w
-    w.use_nodes = True
+    if w.node_tree is None:
+        w.use_nodes = True
     bg = next(n for n in w.node_tree.nodes if n.type == "BACKGROUND")
     bg.inputs[0].default_value = (0.94, 0.94, 0.96, 1.0)
     bg.inputs[1].default_value = 0.55
@@ -99,11 +100,16 @@ def _render_qc_views(out_dir, prefix="cand", samples=28, res=768):
         return str(dst)
 
     renders = {}
-    renders["shaded_front"] = snap(Vector((0.0, -1.0, 0.12)), f"{prefix}_shaded_front.png")
-    renders["shaded_34"] = snap(Vector((-0.75, -0.75, 0.25)), f"{prefix}_shaded_34.png")
+    if mode in ("both", "shaded"):
+        renders["shaded_front"] = snap(Vector((0.0, -1.0, 0.12)), f"{prefix}_shaded_front.png")
+        renders["shaded_34"] = snap(Vector((-0.75, -0.75, 0.25)), f"{prefix}_shaded_34.png")
+
+    if mode not in ("both", "wire"):
+        return renders
 
     clay = bpy.data.materials.new("QC_Clay")
-    clay.use_nodes = True
+    if clay.node_tree is None:
+        clay.use_nodes = True
     c_bsdf = next(n for n in clay.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     c_bsdf.inputs["Base Color"].default_value = (0.76, 0.78, 0.84, 1.0)
     c_bsdf.inputs["Roughness"].default_value = 0.65
@@ -111,7 +117,8 @@ def _render_qc_views(out_dir, prefix="cand", samples=28, res=768):
     total_polys = sum(len(o.data.polygons) for o in meshes)
     if total_polys <= 60000:
         wire = bpy.data.materials.new("QC_Wire")
-        wire.use_nodes = True
+        if wire.node_tree is None:
+            wire.use_nodes = True
         w_bsdf = next(n for n in wire.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
         w_bsdf.inputs["Base Color"].default_value = (0.04, 0.05, 0.09, 1.0)
         w_bsdf.inputs["Roughness"].default_value = 0.8
@@ -171,8 +178,29 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
         sum(m["recovered_quad_ratio"] * m["recovered_faces"] for m in meshes) / max(1, faces_rec), 4
     )
     eff_quad_ratio = max(blend_quad_ratio, glb_rec_quad_ratio)
-    val4_ratio = round(
+    glb_val4_ratio = round(
         sum(m["recovered_valence4_ratio"] * m["recovered_faces"] for m in meshes) / max(1, faces_rec), 4
+    )
+    blend_val4_ratio = (
+        round(
+            sum(m.get("welded_valence4_ratio", 0.0) * m["faces_raw"] for m in blend_meshes)
+            / max(1, total_faces_raw_blend),
+            4,
+        )
+        if blend_meshes
+        else glb_val4_ratio
+    )
+    val4_ratio = max(blend_val4_ratio, glb_val4_ratio)
+    ortho_src = blend_meshes if blend_meshes else meshes
+    quad_ortho = round(
+        sum(m.get("quad_orthogonality_mean", 0.0) * m["faces_raw"] for m in ortho_src)
+        / max(1, sum(m["faces_raw"] for m in ortho_src)),
+        4,
+    )
+    pole_cluster_pct = round(
+        sum(m.get("pole_cluster_pct", 0.0) * m["faces_raw"] for m in ortho_src)
+        / max(1, sum(m["faces_raw"] for m in ortho_src)),
+        2,
     )
     ngons = sum(m["ngons_raw"] for m in blend_meshes) if blend_meshes else sum(m["recovered_ngons"] for m in meshes)
     bad_aspect_pct = round(
@@ -221,6 +249,12 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
             p1_ok = False
             blocking.append(
                 f"Pillar1 Bounding Drift: {fidelity['bbox_dim_drift_pct']}% > {criteria['max_bbox_drift_pct']}%"
+            )
+        max_dev_lim = criteria.get("max_sym_max_dev_pct")
+        if max_dev_lim is not None and fidelity.get("sym_max_dev_pct", 0.0) > float(max_dev_lim):
+            p1_ok = False
+            blocking.append(
+                f"Pillar1 Thin-Detail Drop: sym_max_dev={fidelity['sym_max_dev_pct']}% > {max_dev_lim}%"
             )
     else:
         blocking.append("Pillar1 Geometric Fidelity: failed to evaluate BVH surface distance.")
@@ -302,6 +336,9 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
                 "glb_recovered_quad_ratio": glb_rec_quad_ratio,
                 "effective_quad_ratio": eff_quad_ratio,
                 "valence4_ratio": val4_ratio,
+                "blend_valence4_ratio": blend_val4_ratio,
+                "quad_orthogonality_mean": quad_ortho,
+                "pole_cluster_pct": pole_cluster_pct,
                 "ngons": ngons,
                 "bad_aspect_pct": bad_aspect_pct,
             },
@@ -344,14 +381,18 @@ def main():
     criteria = json.loads(Path(args.criteria_json).read_text(encoding="utf-8-sig"))
 
     blend_report = None
+    renders = {}
+    prefix = Path(args.candidate_glb).stem
     if args.candidate_blend and Path(args.candidate_blend).is_file():
         load_scene_file(args.candidate_blend)
         blend_report = inspect_current_scene(reference_path="")
+        # Render true pure-quad wireframe directly from .blend before GLB triangulation
+        renders.update(_render_qc_views(args.renders_dir, prefix=prefix, mode="wire"))
 
     # Always validate the round-tripped GLB independently as the true engine artifact
     load_scene_file(args.candidate_glb)
     glb_report = inspect_current_scene(reference_path=args.reference_glb)
-    renders = _render_qc_views(args.renders_dir, prefix=Path(args.candidate_glb).stem)
+    renders.update(_render_qc_views(args.renders_dir, prefix=prefix, mode="shaded" if renders else "both"))
 
     verdict = evaluate_six_pillars(glb_report, blend_report, criteria)
     verdict["renders"] = renders
