@@ -1,4 +1,4 @@
-# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-25 08:00 (UTC+8)
+# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-25 09:00 (UTC+8)
 
 **确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色与服装开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**多视角高清贴图安全反投 (`uv-hd-retex`)**、**二次元头发工艺与控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
 
@@ -113,6 +113,12 @@
 
 > 补充 3/4 视角材质渲染：[束腰 3/4 视角渲染](assets/showcase/08_Corset_Retopo_UV_Shaded_34.png) · [多层交领内裙 3/4 视角渲染](assets/showcase/13_Dress_Pleated_Retopo_UV_Shaded_34.png)
 
+### 3. 多视角高清贴图安全反投（`uv-hd-retex` · 保留原 99.9% 四边面低模，4K 重绘反投前后对比）
+
+> 通过固定机位柔光拍摄 → 锁轮廓透明重绘 → 法线角度与视线遮挡安全像素反投 + 原高模死角补齐 + 16 px 扩边烘焙，在不改动原四边面网格的前提下，将模糊贴图升级为高清织物布纹、清晰金饰包边与丝缕分明的流苏细节。
+
+![Corset UV HD Retexture Before After](assets/showcase/17_Corset_UV_HD_Retexture_Before_After.png)
+
 ---
 
 ## 开源功能范围与实测状态
@@ -122,12 +128,14 @@
 | **项目初始化、密钥熔断守护与 UV 像素审计** | `init` / `status` / `inspect-uv` | **已开源 · 测试通过**（含 `guards.py` 零自动重试与熔断锁） |
 | **闭环重拓扑、布线流光顺与 6 维几何验收** | `python run_pipeline.py retopo` | **已开源 · 已实机验证**（法向守卫 BVH 投影防薄片黑洞 + `refine_quad_flow` 切向光顺 + `sym_max_dev` 细部防断碎自愈；50 万面实测达 `99.8%~99.9%` 纯四边面与 `90%~94%` 标准 4-极点） |
 | **自主 UV 展开与 PBR/AO 烘焙闭环** | `python run_pipeline.py uv-bake` | **已开源 · 已实机验证**（Smart/Hybrid/Conformal 切缝、重叠/拉伸审计、Normal/AO/BaseColor/ORM 烘焙） |
+| **多视角高清贴图安全反投（保留原低模）** | `python -B run_pipeline.py uv-hd-retex` | **已开源 · 已实机验证**（新 UV 零重叠重展 + 固定机位柔光拍摄 + 法线/遮挡安全反投 + 16px 扩边 4K 烘焙，补斜视角/内衬后安全覆盖率达 `88.4%`） |
+| **二次元 3D 头发工艺与发束四边面重构** | `hair-craft` / `hair-rebuild` | **已开源 · 已实机验证**（6 维头发质检、竖条 UV、三层 8 点弯月拱形发片重构、Smooth Cage 蛋壳法线转移与 1024×2048 双天使光环贴图） |
 | **服装拟合、谐波权重求解与 4 极限动作压测** | `python run_pipeline.py cloth-rig` | **已开源 · 已实机验证**（拉普拉斯谐波场 + Lipschitz 梯度松弛 + 5 点跨膜弦细分；束腰 `100.0` 分、长袖多层内裙 `86.36` 分通过 4 极限动作） |
 | **视觉点选删面、外科直切与状态化修模工作台** | `visual-cull` / `surgeon` | **已开源 · 已实机验证**（10×10 网格 Face-ID 射线 + 亚像素清扫 + `bisect_plane` 笔直外科直切 + 三联图白模红警内壁/暗底线框 + 快照 `undo`） |
 | **双科 Agent 练手场与自动阅卷器** | `python run_pipeline.py dojo` | **已开源 · 双科 `100/100` 通关验证**（`--exam surgery` 外科删面 + `--exam retopo_500k` 高模四边面重拓扑，纯程序化 0 版权依赖） |
 | **跨任务经验回读与 7 项实验账本** | `knowledge_recall.py` / `experiments` | **已开源 · 读写闭环验证**（启动时回读 `learned_recipes.jsonl` 与 `failure_lessons.jsonl` 动态重排策略先验） |
 | **Stage 0~5 端到端角色编排骨架** | `python run_pipeline.py run --dry-run` | **已开源 · 仅完成 Dry-Run 离线烟测**（各核心 3D 子闭环已真机跑通；全自动串联付费外部 CLI 需用户按 BYOK 自配） |
-| **后续大头演进（AI 高清贴图反投、全角色装配、表情与引擎直出）** | *(后续路线图)* | **持续研发中** |
+| **后续大头演进（全角色装配、深度物理骨骼、表情与引擎直出）** | *(后续路线图)* | **持续研发中** |
 
 ---
 
