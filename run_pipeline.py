@@ -21,6 +21,7 @@ from pipeline.stages import STAGE_ORDER, run_stage_range
 from pipeline.topology_agent_loop import RetopoCriteria, run_closed_loop_retopo
 from pipeline.uv_bake_agent_loop import UVBakeCriteria, run_closed_loop_uv_bake
 from pipeline.cloth_rig_agent_loop import ClothRigCriteria, run_closed_loop_cloth_rig
+from pipeline.uv_hd_retex import add_parser as add_uv_hd_retex_parser
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -300,6 +301,86 @@ def cmd_dojo(args: argparse.Namespace) -> int:
     return int(subprocess.run(cmd, check=False).returncode)
 
 
+def cmd_hair_craft(args: argparse.Namespace) -> int:
+    script = REPO_ROOT / "blender_scripts" / "hair_craft_toolkit.py"
+    cmd = [
+        DEFAULT_BLENDER_EXE,
+        "-b",
+        "--python-exit-code",
+        "1",
+        "--python",
+        str(script),
+        "--",
+        "--mode",
+        args.mode,
+        "--out-dir",
+        str(Path(args.out).resolve()),
+        "--root-hex",
+        args.root_hex,
+        "--mid-hex",
+        args.mid_hex,
+        "--tip-hex",
+        args.tip_hex,
+        "--res",
+        str(args.res),
+    ]
+    if args.input:
+        cmd.extend(["--input", str(Path(args.input).resolve())])
+    if args.body:
+        cmd.extend(["--body", str(Path(args.body).resolve())])
+    if args.hair_mesh:
+        cmd.extend(["--hair-mesh", args.hair_mesh])
+    if args.strip_uv:
+        cmd.append("--strip-uv")
+    if args.add_scalp_cap:
+        cmd.append("--add-scalp-cap")
+    if args.toon_mat:
+        cmd.append("--toon-mat")
+    if args.dry_run:
+        print(json.dumps({"status": "dry_run", "command": "hair-craft", "mode": args.mode, "blender_cmd": cmd}, ensure_ascii=False, indent=2))
+        return 0
+    return int(subprocess.run(cmd, check=False).returncode)
+
+
+def cmd_hair_rebuild(args: argparse.Namespace) -> int:
+    script = REPO_ROOT / "blender_scripts" / "charm_hair_rebuilder.py"
+    cmd = [
+        DEFAULT_BLENDER_EXE,
+        "-b",
+        "--python-exit-code",
+        "1",
+        "--python",
+        str(script),
+        "--",
+        "--json",
+        str(Path(args.json).resolve()),
+        "--out-dir",
+        str(Path(args.out).resolve()),
+        "--root-hex",
+        args.root_hex,
+        "--mid-hex",
+        args.mid_hex,
+        "--tip-hex",
+        args.tip_hex,
+        "--samples",
+        str(args.samples),
+        "--res",
+        str(args.res),
+    ]
+    if args.meta:
+        cmd.extend(["--meta", str(Path(args.meta).resolve())])
+    if args.head:
+        cmd.extend(["--head", str(Path(args.head).resolve())])
+    if args.atlas:
+        cmd.extend(["--atlas", str(Path(args.atlas).resolve())])
+    if args.no_render:
+        cmd.append("--no-render")
+    if args.dry_run:
+        print(json.dumps({"status": "dry_run", "command": "hair-rebuild", "blender_cmd": cmd}, ensure_ascii=False, indent=2))
+        return 0
+    return int(subprocess.run(cmd, check=False).returncode)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Hello 3DNeko — Multi-Agent 3D Character, Topology, UV/Bake & Garment Rigging Pipeline"
@@ -440,6 +521,45 @@ def build_parser() -> argparse.ArgumentParser:
     p_dj.add_argument("--target-tris", type=int, default=500000)
     p_dj.add_argument("--dry-run", action="store_true")
     p_dj.set_defaults(func=cmd_dojo)
+
+    add_uv_hd_retex_parser(sub)
+
+    p_hc = sub.add_parser(
+        "hair-craft",
+        help="Stylized anime 3D hair craft toolkit: 6-pillar audit, vertical strip UV, scalp cap, matte Toon halo atlas & template kit",
+    )
+    p_hc.add_argument("--mode", choices=("audit", "polish", "build-template"), required=True)
+    p_hc.add_argument("--input", default="", help="Input hair .blend/.glb (required for audit/polish)")
+    p_hc.add_argument("--body", default="", help="Optional basemesh .blend/.glb to fit scalp cap / template head")
+    p_hc.add_argument("--out", required=True, help="Output workspace directory")
+    p_hc.add_argument("--hair-mesh", default="")
+    p_hc.add_argument("--strip-uv", action="store_true")
+    p_hc.add_argument("--add-scalp-cap", action="store_true")
+    p_hc.add_argument("--toon-mat", action="store_true")
+    p_hc.add_argument("--root-hex", default="#4A5BD4")
+    p_hc.add_argument("--mid-hex", default="#8C6CE8")
+    p_hc.add_argument("--tip-hex", default="#F2A4D0")
+    p_hc.add_argument("--res", type=int, default=512)
+    p_hc.add_argument("--dry-run", action="store_true")
+    p_hc.set_defaults(func=cmd_hair_craft)
+
+    p_hr = sub.add_parser(
+        "hair-rebuild",
+        help="Rebuild hair strand control-point JSON (e.g. CHARM output) into pure-quad arched anime hair with Smooth Cage normals",
+    )
+    p_hr.add_argument("--json", required=True, help="Input strand control-point JSON")
+    p_hr.add_argument("--out", required=True, help="Output directory")
+    p_hr.add_argument("--meta", default="", help="Optional normalization meta JSON ({center, scale})")
+    p_hr.add_argument("--head", default="", help="Optional reference head .glb/.blend")
+    p_hr.add_argument("--atlas", default="", help="Optional vertical strip hair texture PNG")
+    p_hr.add_argument("--root-hex", default="#4A5BD4")
+    p_hr.add_argument("--mid-hex", default="#8C6CE8")
+    p_hr.add_argument("--tip-hex", default="#F2A4D0")
+    p_hr.add_argument("--samples", type=int, default=22)
+    p_hr.add_argument("--res", type=int, default=512)
+    p_hr.add_argument("--no-render", action="store_true")
+    p_hr.add_argument("--dry-run", action="store_true")
+    p_hr.set_defaults(func=cmd_hair_rebuild)
 
     return parser
 

@@ -1,6 +1,6 @@
-# Hello 3DNeko (`hello-3dneko`)
+# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-25
 
-**确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色与服装开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
+**确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色与服装开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**多视角高清贴图安全反投 (`uv-hd-retex`)**、**二次元头发工艺与控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
 
 > [!IMPORTANT]
 > **关于架构定位与开源范围声明（务实说明）**
@@ -10,7 +10,7 @@
 >    - **全套核心 3D 闭环能力 100% 免费离线运行**：`retopo`（重拓扑）、`uv-bake`（自主 UV 与烘焙）、`cloth-rig`（服装拟合与绑骨）、`visual-cull` / `surgeon`（视觉外科修模工作台）以及 `dojo`（双科 Agent 练手场）**全部仅需本地 Python + Blender，不花一分钱、不需要任何 API Key**。你可以直接用自己手里的 `.glb`/`.blend`、免费开源模型（如 Tripo / Hunyuan3D 等任意渠道导出）或仓内自带练手考题直接跑。
 >    - **Hyper3D Rodin API Key 为可选付费项（需官方订阅）**：只有在使用可选的 `Stage 2` 商业 3D 生成命令（`@hyper3d/cli` / Hyper3D API）时，才需要向 Hyper3D 官方**付费订阅**获取 API Key；不想花钱完全可以跳过 `Stage 2`，不影响本仓库所有核心几何、拓扑、UV 与修模功能！
 >    - **Codex CLI 也完全非必需（无需同时订阅多个 AI！）**：`init` 默认已设为 `--codex-mode manual`——**不需要订阅 Codex**，直接用你手头单个 Agent（例如反重力 Antigravity 自带生图模型）、本地 ComfyUI 或自己画好/生好 2D 图放进目录即可无缝衔接后续 3D 流程！
-> 3. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
+> 3. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**多视角高清贴图反投 (`uv-hd-retex`)**、**二次元头发工艺与发束控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
 > 4. **后续演进方向**：更高阶的 AI 贴图高清化多视角反投、整套角色多部件装配、表情 BlendShape 与游戏引擎直出等大头能力仍在持续研发中。
 
 ---
@@ -69,12 +69,21 @@
    python run_pipeline.py dojo --dojo-dir projects/dojo_surgery --exam surgery --action setup
    python run_pipeline.py dojo --dojo-dir projects/dojo_retopo --exam retopo_500k --action setup
 
-   # ⑨ 汇总 7 项统一实验指标并生成本地记分卡
+   # ⑨ 多视角高清贴图反投（保留原四边面低模，拍摄柔光底图 -> 锁轮廓透明重绘 -> 遮挡安全反投 + 16px 扩边 4K 烘焙）
+   python -B run_pipeline.py uv-hd-retex prepare --input <low.blend> --out projects/retex_demo --size 4096
+   python -B run_pipeline.py uv-hd-retex align --out projects/retex_demo --views-dir projects/retex_demo/generated/selected
+   python -B run_pipeline.py uv-hd-retex bake --high <high.glb> --out projects/retex_demo
+
+   # ⑩ 二次元 3D 头发工艺质检 & 发束控制点 JSON 四边面重构（去飞线 + 拱形饱满发片 + 锋利收尖 + Smooth Cage 蛋壳法线）
+   python run_pipeline.py hair-craft --mode polish --input <hair.glb> --out projects/hair_craft_demo --strip-uv --toon-mat
+   python run_pipeline.py hair-rebuild --json <strands.json> --out projects/hair_rebuild_demo --head <head.glb>
+
+   # ⑪ 汇总 7 项统一实验指标并生成本地记分卡
    python run_pipeline.py experiments
    ```
 4. **请你的 Agent 接着读完仓内规范文件后再干活**
    - 项目协作规则：[AGENTS.md](AGENTS.md)
-   - 工作流、外科修模工作台与双科练手 SOP：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
+   - 工作流、高清贴图反投、外科修模与重拓扑 SOP：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [uv-hd-retexture-sop.md](skills/hello-3dneko-pipeline/references/uv-hd-retexture-sop.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
 
 ---
 
