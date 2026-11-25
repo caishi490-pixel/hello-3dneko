@@ -1,4 +1,4 @@
-# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-25
+# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-25 08:00 (UTC+8)
 
 **确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色与服装开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**多视角高清贴图安全反投 (`uv-hd-retex`)**、**二次元头发工艺与控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
 
