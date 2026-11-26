@@ -1,6 +1,6 @@
-# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-25 09:00 (UTC+8)
+# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-26 08:47 (UTC+8)
 
-**确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色与服装开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**多视角高清贴图安全反投 (`uv-hd-retex`)**、**二次元头发工艺与控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
+**确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色、服装与硬表面几何开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**多视角高清贴图安全反投 (`uv-hd-retex`)**、**二次元头发工艺与控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**确定性几何平面/多平面关系精修与独立 QA 回滚 (`gre` P0–P3)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
 
 > [!IMPORTANT]
 > **关于架构定位与开源范围声明（务实说明）**
@@ -10,7 +10,7 @@
 >    - **全套核心 3D 闭环能力 100% 免费离线运行**：`retopo`（重拓扑）、`uv-bake`（自主 UV 与烘焙）、`cloth-rig`（服装拟合与绑骨）、`visual-cull` / `surgeon`（视觉外科修模工作台）以及 `dojo`（双科 Agent 练手场）**全部仅需本地 Python + Blender，不花一分钱、不需要任何 API Key**。你可以直接用自己手里的 `.glb`/`.blend`、免费开源模型（如 Tripo / Hunyuan3D 等任意渠道导出）或仓内自带练手考题直接跑。
 >    - **Hyper3D Rodin API Key 为可选付费项（需官方订阅）**：只有在使用可选的 `Stage 2` 商业 3D 生成命令（`@hyper3d/cli` / Hyper3D API）时，才需要向 Hyper3D 官方**付费订阅**获取 API Key；不想花钱完全可以跳过 `Stage 2`，不影响本仓库所有核心几何、拓扑、UV 与修模功能！
 >    - **Codex CLI 也完全非必需（无需同时订阅多个 AI！）**：`init` 默认已设为 `--codex-mode manual`——**不需要订阅 Codex**，直接用你手头单个 Agent（例如反重力 Antigravity 自带生图模型）、本地 ComfyUI 或自己画好/生好 2D 图放进目录即可无缝衔接后续 3D 流程！
-> 3. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**多视角高清贴图反投 (`uv-hd-retex`)**、**二次元头发工艺与发束控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
+> 3. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**多视角高清贴图反投 (`uv-hd-retex`)**、**二次元头发工艺与发束控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**确定性几何平面/多平面关系精修与独立 QA 回滚 (`gre` P0–P3)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
 > 4. **后续演进方向**：更高阶的 AI 贴图高清化多视角反投、整套角色多部件装配、表情 BlendShape 与游戏引擎直出等大头能力仍在持续研发中。
 
 ---
@@ -78,12 +78,17 @@
    python run_pipeline.py hair-craft --mode polish --input <hair.glb> --out projects/hair_craft_demo --strip-uv --toon-mat
    python run_pipeline.py hair-rebuild --json <strands.json> --out projects/hair_rebuild_demo --head <head.glb>
 
-   # ⑪ 汇总 7 项统一实验指标并生成本地记分卡
+   # ⑪ 确定性几何平面与多平面关系精修（GRE P0–P3：先程序化复现样本，再运行平面精修 / 独立 QA 九项门禁与回滚 / 多平面关系联合求解）
+   python gre_testdata/table/reproduce.py --blender <blender.exe> --output-dir gre_testdata/table
+   python tests/run_gre_p1.py --blender <blender.exe> --numpy-python <blender_python.exe> --data ./gre_testdata/table --output-dir ./outputs/p1_reproduced
+   python tests/run_gre_p3.py --blender <blender.exe> --numpy-python <blender_python.exe> --data ./gre_testdata/cabinet --output-dir ./outputs/p3_reproduced
+
+   # ⑫ 汇总 7 项统一实验指标并生成本地记分卡
    python run_pipeline.py experiments
    ```
 4. **请你的 Agent 接着读完仓内规范文件后再干活**
    - 项目协作规则：[AGENTS.md](AGENTS.md)
-   - 工作流、高清贴图反投、外科修模与重拓扑 SOP：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [uv-hd-retexture-sop.md](skills/hello-3dneko-pipeline/references/uv-hd-retexture-sop.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
+   - 工作流、高清贴图反投、外科修模、重拓扑与 GRE 几何精修规范：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [gre/README.md](gre/README.md) · [uv-hd-retexture-sop.md](skills/hello-3dneko-pipeline/references/uv-hd-retexture-sop.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
 
 ---
 
@@ -119,6 +124,14 @@
 
 ![Corset UV HD Retexture Before After](assets/showcase/17_Corset_UV_HD_Retexture_Before_After.png)
 
+### 4. 确定性几何平面与多平面关系精修（`gre` P0–P3 · 独立 QA 九项门禁 + SHA-256 快照回滚）
+
+> 面向 AI 生成或扫描硬表面资产的局部曲面波浪与倾斜偏差，在不改动拓扑、UV 与材质哈希的前提下，通过稳定 `gre_vid` / `gre_fid` 指纹、面积加权 SVD + 锁定边缘锚定（P1）、九项独立几何/UV/碰撞门禁与原生快照回滚（P2），以及多平面族平行/垂直/有符号间距联合 LM 求解（P3），实现零保护区漂移的确定性几何修复（详见 [gre/README.md](gre/README.md)）。
+
+![GRE P1 P2 Table Plane Repair Showcase](assets/showcase/18_GRE_P1_P2_Table_Plane_Repair_Showcase.png)
+
+![GRE P3 Cabinet MultiPlane Relations Showcase](assets/showcase/19_GRE_P3_Cabinet_MultiPlane_Relations_Showcase.png)
+
 ---
 
 ## 开源功能范围与实测状态
@@ -130,6 +143,7 @@
 | **自主 UV 展开与 PBR/AO 烘焙闭环** | `python run_pipeline.py uv-bake` | **已开源 · 已实机验证**（Smart/Hybrid/Conformal 切缝、重叠/拉伸审计、Normal/AO/BaseColor/ORM 烘焙） |
 | **多视角高清贴图安全反投（保留原低模）** | `python -B run_pipeline.py uv-hd-retex` | **已开源 · 已实机验证**（新 UV 零重叠重展 + 固定机位柔光拍摄 + 法线/遮挡安全反投 + 16px 扩边 4K 烘焙，补斜视角/内衬后安全覆盖率达 `88.4%`） |
 | **二次元 3D 头发工艺与发束四边面重构** | `hair-craft` / `hair-rebuild` | **已开源 · 已实机验证**（6 维头发质检、竖条 UV、三层 8 点弯月拱形发片重构、Smooth Cage 蛋壳法线转移与 1024×2048 双天使光环贴图） |
+| **确定性几何平面/多平面关系精修与独立 QA 回滚（`gre` P0–P3）** | `gre/cli.py` / `qa_cli.py` / `p3_cli.py` | **已开源 · 已实机验证**（木桌 1h 平面精修 RMS `7.716 mm -> 0.008 mm` 降幅 `99.89%`；独立 QA 九项硬门禁 + SHA-256 原生回滚；柜子多平面族平行/垂直/间距联合求解偏差 `<= 0.005°` 且 `5,822` 锁点零漂移） |
 | **服装拟合、谐波权重求解与 4 极限动作压测** | `python run_pipeline.py cloth-rig` | **已开源 · 已实机验证**（拉普拉斯谐波场 + Lipschitz 梯度松弛 + 5 点跨膜弦细分；束腰 `100.0` 分、长袖多层内裙 `86.36` 分通过 4 极限动作） |
 | **视觉点选删面、外科直切与状态化修模工作台** | `visual-cull` / `surgeon` | **已开源 · 已实机验证**（10×10 网格 Face-ID 射线 + 亚像素清扫 + `bisect_plane` 笔直外科直切 + 三联图白模红警内壁/暗底线框 + 快照 `undo`） |
 | **双科 Agent 练手场与自动阅卷器** | `python run_pipeline.py dojo` | **已开源 · 双科 `100/100` 通关验证**（`--exam surgery` 外科删面 + `--exam retopo_500k` 高模四边面重拓扑，纯程序化 0 版权依赖） |

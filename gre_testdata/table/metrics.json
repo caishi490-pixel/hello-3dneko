@@ -1,0 +1,110 @@
+{
+  "clean": {
+    "object": "Table",
+    "vertex_count": 9034,
+    "edge_count": 18064,
+    "face_count": 9032,
+    "loop_count": 36128,
+    "uv_layers": [
+      "TableUV"
+    ],
+    "unit_system": "METRIC",
+    "unit_scale": 1.0,
+    "matrix_world": [
+      [
+        1.0,
+        0.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        1.0,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        1.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ]
+    ],
+    "topology_hash": "3e3ebf957243107df717b9f15bb6e1ccd6de3b825f0512dc04a983ab05a98f7e",
+    "uv_hash": "9e022d6ca3b66ce9c3f211ce52dc3df30b53bed63b8c1061042d6cb2d49a7736",
+    "material_hash": "dfcb7ac8daf865fc957caae8125725db53cf84adb61e241ba1bab3326b778f8d",
+    "object_relationship_hash": "70920dfa6a457a2f36d1de0c4852c66bb649c239d4a0088292270b95d1e6fd37",
+    "position_hash": "802df44b835bed2e8a5afe8d7a2a16eeb2202f093d20fe34031a927e8a24a237",
+    "source_hash": "0a7a0ada43ab146960e467ce439609ecbdbfe60f0b07f3ced0510d3145f5aba3"
+  },
+  "grid": [
+    64,
+    64
+  ],
+  "dimensions_m": {
+    "width": 1.6,
+    "depth": 0.85,
+    "height": 0.75,
+    "tabletop_thickness": 0.065,
+    "bevel": 0.003,
+    "leg_width": 0.07471875,
+    "leg_depth": 0.079125
+  },
+  "median_edge_m": 0.019046872854232788,
+  "editable_faces": 4096,
+  "protected_faces": 4936,
+  "face_overlap": 0,
+  "locked_vertices": 5065,
+  "clean_manifold": true,
+  "clean_uv_complete": true,
+  "variants": [
+    {
+      "file": "table_noisy_s42_a0.5.blend",
+      "seed": 42,
+      "amplitude_h": 0.5,
+      "wavelength_m": 0.32,
+      "peak_m": 0.009523451328277588,
+      "rms_m": 0.0038580481051568487,
+      "p95_abs_m": 0.007334530353546143,
+      "moved_vertices": 3969,
+      "locked_peak_m": 0.0,
+      "repeat_positions_exact": true,
+      "positions_only": true,
+      "position_hash": "e2c95a1f417733f11c203866fd1f5d0184c8e666d5883b191c9deb543a274da0"
+    },
+    {
+      "file": "table_noisy_s42_a1.blend",
+      "seed": 42,
+      "amplitude_h": 1.0,
+      "wavelength_m": 0.32,
+      "peak_m": 0.019046902656555176,
+      "rms_m": 0.007716097223952373,
+      "p95_abs_m": 0.014669060707092285,
+      "moved_vertices": 3969,
+      "locked_peak_m": 0.0,
+      "repeat_positions_exact": true,
+      "positions_only": true,
+      "position_hash": "346a1173dfef75d944ec26f9c0ee5731859fbda850710d3360862788fddb16be"
+    },
+    {
+      "file": "table_noisy_s42_a3.blend",
+      "seed": 42,
+      "amplitude_h": 3.0,
+      "wavelength_m": 0.32,
+      "peak_m": 0.05714058876037598,
+      "rms_m": 0.023148290647612587,
+      "p95_abs_m": 0.04400713443756103,
+      "moved_vertices": 3969,
+      "locked_peak_m": 0.0,
+      "repeat_positions_exact": true,
+      "positions_only": true,
+      "position_hash": "f2eda042be48825992d7e786e0ce2031353df73b02c2e587423ad602b75f29c1"
+    }
+  ]
+}
