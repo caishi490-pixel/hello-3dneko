@@ -1,6 +1,6 @@
-# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-26 08:47 (UTC+8)
+# Hello 3DNeko (`hello-3dneko`) · 最近更新：2026-11-28 15:52 (UTC+8)
 
-**确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的二次元 3D 角色、服装与硬表面几何开源工具链**。通过跨进程无头 Blender 调度，将 **闭环自动重拓扑与四边面流光顺 (`retopo`)**、**自主 UV 展开与 PBR/AO 烘焙 (`uv-bake`)**、**多视角高清贴图安全反投 (`uv-hd-retex`)**、**二次元头发工艺与控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**确定性几何平面/多平面关系精修与独立 QA 回滚 (`gre` P0–P3)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`smart_face_culler`)** 与 **跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
+**确定性 3D 质检自愈闭环引擎 + 供外部多模态 Agent（Antigravity / Codex / Claude Code）编排的跨品类 3D 角色、服装、头发与硬表面几何开源工具链**。通过跨进程无头 Blender 调度与可选 MIT/GPL 隔离外核，将 **逐件全息体检与能力探测 (`triage`)**、**多件配额分摊与闭环自动重拓扑 (`retopo`)**、**共享图集自主 UV 与 PBR/AO 烘焙 (`uv-bake` / `pack-glb`)**、**多视角高清贴图安全反投 (`uv-hd-retex`)**、**二次元头发工艺与控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**确定性几何平面/多平面关系/特征保护去噪与独立 QA 回滚 (`gre` P0–P5)**、**服装拟合与谐波权重修复 (`cloth-rig`)**、**视觉标红预览智能删面 (`visual-cull` / `surgeon`)** 与 **标签化跨任务经验回读 (`knowledge_recall`)** 串联为可审计、可回滚、可复现的工程底座。
 
 > [!IMPORTANT]
 > **关于架构定位与开源范围声明（务实说明）**
@@ -10,7 +10,7 @@
 >    - **全套核心 3D 闭环能力 100% 免费离线运行**：`retopo`（重拓扑）、`uv-bake`（自主 UV 与烘焙）、`cloth-rig`（服装拟合与绑骨）、`visual-cull` / `surgeon`（视觉外科修模工作台）以及 `dojo`（双科 Agent 练手场）**全部仅需本地 Python + Blender，不花一分钱、不需要任何 API Key**。你可以直接用自己手里的 `.glb`/`.blend`、免费开源模型（如 Tripo / Hunyuan3D 等任意渠道导出）或仓内自带练手考题直接跑。
 >    - **Hyper3D Rodin API Key 为可选付费项（需官方订阅）**：只有在使用可选的 `Stage 2` 商业 3D 生成命令（`@hyper3d/cli` / Hyper3D API）时，才需要向 Hyper3D 官方**付费订阅**获取 API Key；不想花钱完全可以跳过 `Stage 2`，不影响本仓库所有核心几何、拓扑、UV 与修模功能！
 >    - **Codex CLI 也完全非必需（无需同时订阅多个 AI！）**：`init` 默认已设为 `--codex-mode manual`——**不需要订阅 Codex**，直接用你手头单个 Agent（例如反重力 Antigravity 自带生图模型）、本地 ComfyUI 或自己画好/生好 2D 图放进目录即可无缝衔接后续 3D 流程！
-> 3. **当前开源范围**：已完整开源至 **重拓扑与布线流光顺 (`retopo`)**、**自主 UV/烘焙 (`uv-bake`)**、**多视角高清贴图反投 (`uv-hd-retex`)**、**二次元头发工艺与发束控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**确定性几何平面/多平面关系精修与独立 QA 回滚 (`gre` P0–P3)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)** 与 **跨任务经验回读 (`knowledge_recall.py`)**。
+> 3. **当前开源范围**：已完整开源至 **逐件全息体检与能力探测 (`triage`)**、**多部件预算分摊、逐壳覆盖与分离间隙门禁、短路径沙盒与双交换契约 (`retopo`)**、**共享图集按通道烘焙、四项法线诊断与零切线修补 (`uv-bake` / `pack-glb`)**、**可选 MIT `AutoRemesher` 适配器与 GPL 隔离 `PyMeshLab` Worker (`gpl_workers/pymeshlab_worker.py`)**、**多视角高清贴图反投 (`uv-hd-retex` + `--region-profile`)**、**二次元头发工艺与发束控制点四边面重构 (`hair-craft` / `hair-rebuild`)**、**确定性几何精修、特征保护去噪与批跑审核 (`gre` P0–P5)**、**服装拟合与谐波权重 (`cloth-rig`)**、**视觉外科修模工作台 (`visual-cull` / `surgeon`)**、**双科练手场 (`dojo`)**、**标签化跨任务经验回读 (`knowledge_recall.py`)** 与 **自适应 `Skill v2.1`**。
 > 4. **后续演进方向**：更高阶的 AI 贴图高清化多视角反投、整套角色多部件装配、表情 BlendShape 与游戏引擎直出等大头能力仍在持续研发中。
 
 ---
@@ -46,14 +46,18 @@
    # ① 初始化一个角色工作区
    python run_pipeline.py init --id neko_demo --name "Demo Character" --brief "Cel-shaded anime character in 40-deg open A-pose"
 
-   # ② 预演前置全链路状态机（Dry-Run 不产生任何付费调用）
+   # ② 逐件全息体检与本机可用后端探测（建议在重拓扑/烘焙前先运行）
+   python run_pipeline.py triage --input <raw_model.glb> --out projects/triage_demo
+
+   # ③ 预演前置全链路状态机（Dry-Run 不产生任何付费调用）
    python run_pipeline.py run --project projects/neko_demo --dry-run
 
-   # ③ 闭环重拓扑 + 法向守卫贴合 + 切向四边面流光顺 + 6 维验收（含细部防断碎自愈）
+   # ④ 闭环重拓扑 + 多件配额分摊 + 逐壳/间隙防丢门禁 + 法向守卫贴合 + 6 维验收
    python run_pipeline.py retopo --input <raw_model.glb> --out projects/retopo_demo --max-iters 5
 
-   # ④ 自主 UV 展开与 PBR/AO 烘焙闭环
+   # ⑤ 自主 UV 展开、共享图集按通道 PBR/AO 烘焙与四项法线诊断（可用 pack-glb 修补零切线）
    python run_pipeline.py uv-bake --high <high.glb> --low <low.blend> --out projects/uv_bake_demo --max-iters 4
+   python run_pipeline.py pack-glb --input <in.glb> --out <packed.glb>
 
    # ⑤ 服装拟合 + 谐波场权重求解 + 4 极限动作压测
    python run_pipeline.py cloth-rig --body <rigged_body.glb> --garment <garment.glb> --out projects/cloth_rig_demo --max-iters 3
@@ -78,17 +82,19 @@
    python run_pipeline.py hair-craft --mode polish --input <hair.glb> --out projects/hair_craft_demo --strip-uv --toon-mat
    python run_pipeline.py hair-rebuild --json <strands.json> --out projects/hair_rebuild_demo --head <head.glb>
 
-   # ⑪ 确定性几何平面与多平面关系精修（GRE P0–P3：先程序化复现样本，再运行平面精修 / 独立 QA 九项门禁与回滚 / 多平面关系联合求解）
+   # ⑪ 确定性几何精修与批跑（GRE P0–P5：平面/多平面关系/特征保护去噪 + 独立 QA 九项门禁与回滚）
    python gre_testdata/table/reproduce.py --blender <blender.exe> --output-dir gre_testdata/table
    python tests/run_gre_p1.py --blender <blender.exe> --numpy-python <blender_python.exe> --data ./gre_testdata/table --output-dir ./outputs/p1_reproduced
    python tests/run_gre_p3.py --blender <blender.exe> --numpy-python <blender_python.exe> --data ./gre_testdata/cabinet --output-dir ./outputs/p3_reproduced
+   python tests/run_gre_p4.py --blender <blender.exe> --numpy-python <blender_python.exe> --data ./gre_testdata/vase --output-dir ./outputs/p4_reproduced
+   python -m gre.pipeline batch --blender <blender.exe> --output-dir ./outputs/gre_p5_reproduced
 
    # ⑫ 汇总 7 项统一实验指标并生成本地记分卡
    python run_pipeline.py experiments
    ```
 4. **请你的 Agent 接着读完仓内规范文件后再干活**
    - 项目协作规则：[AGENTS.md](AGENTS.md)
-   - 工作流、高清贴图反投、外科修模、重拓扑与 GRE 几何精修规范：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [gre/README.md](gre/README.md) · [uv-bake-and-hd-retex-sop.md](skills/hello-3dneko-pipeline/references/uv-bake-and-hd-retex-sop.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
+   - 自适应路由、工作流、高清贴图反投、外科修模、重拓扑与 GRE 几何精修规范：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [adaptive-triage-and-routing.md](skills/hello-3dneko-pipeline/references/adaptive-triage-and-routing.md) · [gre/README.md](gre/README.md) · [uv-bake-and-hd-retex-sop.md](skills/hello-3dneko-pipeline/references/uv-bake-and-hd-retex-sop.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md) · [hard-surface-and-gre-sop.md](skills/hello-3dneko-pipeline/references/hard-surface-and-gre-sop.md)
 
 ---
 
@@ -138,12 +144,12 @@
 
 | 模块 / 能力 | CLI 命令 | 当前开源与验证状态 |
 | :--- | :--- | :--- |
-| **项目初始化、密钥熔断守护与 UV 像素审计** | `init` / `status` / `inspect-uv` | **已开源 · 测试通过**（含 `guards.py` 零自动重试与熔断锁） |
-| **闭环重拓扑、布线流光顺与 6 维几何验收** | `python run_pipeline.py retopo` | **已开源 · 已实机验证**（法向守卫 BVH 投影防薄片黑洞 + `refine_quad_flow` 切向光顺 + `sym_max_dev` 细部防断碎自愈；50 万面实测达 `99.8%~99.9%` 纯四边面与 `90%~94%` 标准 4-极点） |
-| **自主 UV 展开与 PBR/AO 烘焙闭环** | `python run_pipeline.py uv-bake` | **已开源 · 已实机验证**（Smart/Hybrid/Conformal 切缝、重叠/拉伸审计、Normal/AO/BaseColor/ORM 烘焙） |
-| **多视角高清贴图安全反投（保留原低模）** | `python -B run_pipeline.py uv-hd-retex` | **已开源 · 已实机验证**（新 UV 零重叠重展 + 固定机位柔光拍摄 + 法线/遮挡安全反投 + 16px 扩边 4K 烘焙，补斜视角/内衬后安全覆盖率达 `88.4%`） |
+| **项目初始化、密钥熔断守护、逐件体检与 UV 审计** | `init` / `status` / `triage` / `inspect-uv` | **已开源 · 已实机验证**（含 `guards.py` 熔断锁、`asset_triage.py` 逐件体征与 `available_backends` 实时探测） |
+| **闭环重拓扑、多件配额分摊与防丢壳/间隙门禁** | `python run_pipeline.py retopo` | **已开源 · 已实机验证**（短路径沙盒 + 预焊接交换契约 + 小件保形兜底 + `gap_coverage_validator.py` 逐壳局部覆盖/分离间隙射线门禁；可选对接 MIT `AutoRemesher` 与 GPL 隔离 `PyMeshLab` Worker） |
+| **自主 UV 展开、共享图集烘焙与 GLB 零切线修补** | `uv-bake` / `pack-glb` | **已开源 · 已实机验证**（Smart/Hybrid/Conformal 切缝、多件共享图集按通道烘焙、四项拆分法线诊断 `normal_bake_diagnostics.py`、`OPTIX->CUDA->HIP->ONEAPI->CPU` 自动回退与 `pack-glb` 二进制零切线修复） |
+| **多视角高清贴图安全反投（保留原低模）** | `python -B run_pipeline.py uv-hd-retex` | **已开源 · 已实机验证**（支持 `--region-profile` 配置化区域权重模板、新 UV 零重叠重展 + 固定机位柔光拍摄 + 遮挡安全反投 + 16px 扩边 4K 烘焙） |
 | **二次元 3D 头发工艺与发束四边面重构** | `hair-craft` / `hair-rebuild` | **已开源 · 已实机验证**（6 维头发质检、竖条 UV、三层 8 点弯月拱形发片重构、Smooth Cage 蛋壳法线转移与 1024×2048 双天使光环贴图） |
-| **确定性几何平面/多平面关系精修与独立 QA 回滚（`gre` P0–P3）** | `gre/cli.py` / `qa_cli.py` / `p3_cli.py` | **已开源 · 已实机验证**（木桌 1h 平面精修 RMS `7.716 mm -> 0.008 mm` 降幅 `99.89%`；独立 QA 九项硬门禁 + SHA-256 原生回滚；柜子多平面族平行/垂直/间距联合求解偏差 `<= 0.005°` 且 `5,822` 锁点零漂移） |
+| **确定性几何精修、特征保护去噪与批跑审核（`gre` P0–P5）** | `gre/cli.py` / `qa_cli.py` / `p3_cli.py` / `p4_cli.py` / `gre.pipeline` | **已开源 · 已实机验证**（P1/P2 平面精修与九项硬门禁回滚、P3 多平面关系联合求解偏差 `<= 0.005°` 且零漂移、P4 特征保护双边去噪、P5 批跑与人工审核流） |
 | **服装拟合、谐波权重求解与 4 极限动作压测** | `python run_pipeline.py cloth-rig` | **已开源 · 已实机验证**（拉普拉斯谐波场 + Lipschitz 梯度松弛 + 5 点跨膜弦细分；束腰 `100.0` 分、长袖多层内裙 `86.36` 分通过 4 极限动作） |
 | **视觉点选删面、外科直切与状态化修模工作台** | `visual-cull` / `surgeon` | **已开源 · 已实机验证**（10×10 网格 Face-ID 射线 + 亚像素清扫 + `bisect_plane` 笔直外科直切 + 三联图白模红警内壁/暗底线框 + 快照 `undo`） |
 | **双科 Agent 练手场与自动阅卷器** | `python run_pipeline.py dojo` | **已开源 · 双科 `100/100` 通关验证**（`--exam surgery` 外科删面 + `--exam retopo_500k` 高模四边面重拓扑，纯程序化 0 版权依赖） |
@@ -198,6 +204,7 @@ Hello 3DNeko 开源版严格采用 **100% BYOK（Bring Your Own Key）** 模式�
 
 本项目采用**双许可跨进程解耦架构**，保障社区自由使用与下游合规开发：
 
-- **主编排器、CLI、验证架构、安全熔断与测试 (`run_pipeline.py`, `pipeline/`, `workflows/`, `templates/`, `tests/`)**：采用 **Apache License 2.0**（详见根目录 `LICENSE`）。主协调层**不直接导入 `bpy` / `bmesh`**。
-- **Blender 无头执行脚本 (`blender_scripts/`)**：运行在 Blender 内部并直接调用 `bpy` / `bmesh`，遵循与 Blender 一致的 **GNU GPL-3.0-or-later**（详见 [blender_scripts/LICENSE-GPL-3.0-NOTICE.md](blender_scripts/LICENSE-GPL-3.0-NOTICE.md)），由外部主进程通过 `subprocess` 与 JSON/GLB 标准文件隔离调用。
+- **主编排器、CLI、纯数学精修核心、安全熔断与测试 (`run_pipeline.py`, `pipeline/`, `gre/` 纯数学核, `workflows/`, `templates/`, `tests/`)**：采用 **Apache License 2.0**（详见根目录 `LICENSE`）。主协调层与 `gre/` 纯数学核心**严禁导入 `bpy` / `bmesh` / `mathutils` / `pymeshlab` / `curiomesh`**（由 `test_pipeline_smoke.py` 递归 AST 扫描门禁强制守护）。
+- **Blender 与 PyMeshLab 隔离执行工人面 (`blender_scripts/`, `gpl_workers/`, `gre/blender_io.py`, `gre/pipeline_worker.py`, `gre/*_cli.py`)**：遵循 **GNU GPL-3.0-or-later**（详见 [blender_scripts/LICENSE-GPL-3.0-NOTICE.md](blender_scripts/LICENSE-GPL-3.0-NOTICE.md) 与 [gpl_workers/README.md](gpl_workers/README.md)），由外部主进程通过 `subprocess` 与短路径 JSON/OBJ/GLB 标准文件隔离调用。
+- **可选 MIT 外核适配器 (`pipeline/retopo_backends.py`)**：支持按需探测并调用独立 MIT 协议 CLI（如 `AutoRemesher`）。
 - **零 AGPL 记忆组件绑定**：本仓不依赖也不包含任何 `AGPL` 协议外部记忆服务端；本地经验记录采用独立轻量化 JSONL 账本结构。
