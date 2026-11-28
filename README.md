@@ -88,13 +88,13 @@
    ```
 4. **请你的 Agent 接着读完仓内规范文件后再干活**
    - 项目协作规则：[AGENTS.md](AGENTS.md)
-   - 工作流、高清贴图反投、外科修模、重拓扑与 GRE 几何精修规范：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [gre/README.md](gre/README.md) · [uv-hd-retexture-sop.md](skills/hello-3dneko-pipeline/references/uv-hd-retexture-sop.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
+   - 工作流、高清贴图反投、外科修模、重拓扑与 GRE 几何精修规范：[skills/hello-3dneko-pipeline/SKILL.md](skills/hello-3dneko-pipeline/SKILL.md) · [gre/README.md](gre/README.md) · [uv-bake-and-hd-retex-sop.md](skills/hello-3dneko-pipeline/references/uv-bake-and-hd-retex-sop.md) · [visual-surgical-cull-sop.md](skills/hello-3dneko-pipeline/references/visual-surgical-cull-sop.md) · [closed-loop-retopology.md](skills/hello-3dneko-pipeline/references/closed-loop-retopology.md)
 
 ---
 
 ## 效果展示（纯原创成果与闭环重拓扑/UV 预览）
 
-> 以下全部展示图均为项目发起人纯原创设计与管线实测渲染（已严格排除任何非原创参考素模）；后段自主 UV/烘焙成品图仅作暂未开源模块的效果预览，核心代码属发起人专有知识产权。
+> 以下展示图来自项目发起人的原创设计和管线实测。所用自主 UV 与烘焙流程已包含在公开代码中。
 
 ### 1. 2D 三视图 / 刀版拆分与 3D 分件及动作验收
 

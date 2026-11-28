@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "families": [
+    {"semantic": "plane", "reference": "table/table_clean.blend", "sources": ["table/table_clean.blend", "table/table_noisy_s42_a0.5.blend", "table/table_noisy_s42_a1.blend", "table/table_noisy_s42_a3.blend"], "annotations": ["table/table_annotations.json"], "algorithms": ["none", "plane"], "seed": 42},
+    {"semantic": "planar_assembly", "reference": "cabinet/cabinet_clean.blend", "sources": ["cabinet/cabinet_clean.blend", "cabinet/cabinet_tilted.blend", "cabinet/cabinet_noisy.blend"], "annotations": ["cabinet/cabinet_annotations.json"], "algorithms": ["none", "plane_family"], "seed": 42, "transaction_source": "cabinet/cabinet_tilted.blend"},
+    {"semantic": "planar_assembly", "reference": "cabinet/cabinet_clean.blend", "sources": ["cabinet/cabinet_tilted.blend"], "annotations": ["cabinet/cabinet_wrong_relation.json"], "algorithms": ["plane_family"], "seed": 42, "design_conflict": true},
+    {"semantic": "organic", "reference": "vase/vase_clean.blend", "sources": ["vase/vase_clean.blend", "vase/vase_noisy.blend"], "annotations": ["vase/vase_marked.json", "vase/vase_unmarked.json"], "truth": "vase/vase_truth.json", "algorithms": ["none", "laplacian", "taubin", "bilateral"], "seed": 42}
+  ]
+}

@@ -45,6 +45,7 @@ class UVBakeCriteria:
     min_ao_std: float = 0.005
     max_ao_blackout_pct: float = 10.0
     max_diffuse_black_leak_pct: float = 12.0
+    max_heuristic_cross_layer_pct: float = 3.5
 
 
 def get_uv_strategy_route(strategy_id: str) -> str:
@@ -76,8 +77,9 @@ def agent_decide_uv_bake_plan(
     wide_ray = round(max(0.025, min(0.055, diag * 0.024)), 5)
 
     use_cage = bool({"bake_blackout", "bake_normal_flip", "bake_low_coverage"} & last_classes)
-    cur_cage = wide_cage if "bake_low_coverage" in last_classes else tight_cage
-    cur_ray = wide_ray if "bake_low_coverage" in last_classes else tight_ray
+    cross_layer = "bake_cross_layer" in last_classes
+    cur_cage = tight_cage * 0.25 if cross_layer else wide_cage if "bake_low_coverage" in last_classes else tight_cage
+    cur_ray = tight_ray if cross_layer else wide_ray if "bake_low_coverage" in last_classes else 0.0
     ao_dist = round(max(0.045, min(0.10, diag * 0.025)), 3)
 
     candidates: list[tuple[str, list[dict[str, Any]], str]] = []
@@ -286,6 +288,10 @@ def analyze_uv_failure_and_rollback(
                 failure_classes.append("uv_packing_low")
             elif "bakecoverage" in low_bf or "bakemissing" in low_bf:
                 failure_classes.append("bake_low_coverage")
+            elif "crosslayer" in low_bf:
+                failure_classes.append("bake_cross_layer")
+            elif "raycoverage" in low_bf:
+                failure_classes.append("bake_low_coverage")
             elif "normalflip" in low_bf:
                 failure_classes.append("bake_normal_flip")
             elif "blackout" in low_bf or "black_leak" in low_bf or "flat" in low_bf:
@@ -351,7 +357,8 @@ def run_closed_loop_uv_bake(
     deliverables_dir.mkdir(parents=True, exist_ok=True)
 
     criteria_path = work_dir / "uv_bake_criteria.json"
-    criteria_path.write_text(json.dumps(asdict(crit), ensure_ascii=False, indent=2), encoding="utf-8")
+    criteria_path.write_text(json.dumps({**asdict(crit), "require_normal_diagnostics": True},
+                                       ensure_ascii=False, indent=2), encoding="utf-8")
 
     # Never mutate originals: duplicate both inputs into checkpoint vault
     high_ref = checkpoints_dir / f"00_high_reference{high_poly.suffix.lower() or '.glb'}"

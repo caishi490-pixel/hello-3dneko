@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import ast
+import importlib.util
 import json
+import re
 import subprocess
 import sys
 import tempfile
@@ -24,6 +27,14 @@ from pipeline.image_tools import (  # noqa: E402
     slice_turnaround_views,
 )
 from pipeline.stages import run_stage_range  # noqa: E402
+
+
+GRE_CORE = {
+    "__init__", "collision", "denoise", "geometry", "pipeline", "plan", "plane",
+    "qa", "ransac", "relations", "report", "snapshot",
+}
+GRE_BLENDER_WORKERS = {"blender_io", "pipeline_worker", "cli", "p3_cli", "p4_cli", "qa_cli"}
+BLENDER_MODULES = {"bpy", "bmesh", "mathutils", "pymeshlab", "curiomesh"}
 
 
 class PipelineSmokeTests(unittest.TestCase):
@@ -580,11 +591,10 @@ class PipelineSmokeTests(unittest.TestCase):
                 REPO_ROOT / "knowledge" / "README.md",
                 REPO_ROOT / "blender_scripts" / "LICENSE-GPL-3.0-NOTICE.md",
             ]
-            + sorted((REPO_ROOT / "pipeline").glob("*.py"))
-            + sorted((REPO_ROOT / "blender_scripts").glob("*.py"))
-            + sorted((REPO_ROOT / "workflows").glob("*"))
-            + sorted((REPO_ROOT / "templates").glob("*"))
-            + sorted((REPO_ROOT / "tests").glob("*.py"))
+            + [path for folder in ("pipeline", "blender_scripts", "gpl_workers", "workflows",
+                                   "templates", "tests", "gre", "gre_testdata")
+               for path in sorted((REPO_ROOT / folder).rglob("*"))
+               if path.suffix in {".py", ".md", ".json", ".yaml", ".toml"}]
             + sorted((REPO_ROOT / "skills").rglob("*.md"))
         )
         for fp in scan_files:
@@ -593,24 +603,62 @@ class PipelineSmokeTests(unittest.TestCase):
             text = fp.read_text(encoding="utf-8-sig")
             for tok in forbidden_tokens:
                 self.assertNotIn(tok, text, msg=f"Sensitive/private token {tok!r} found in {fp}")
+            local_path = r"(?i)\b[A-Z]:(?:\\{1,2}|/)[^\\/\s\"'<>]"
+            self.assertIsNone(re.search(local_path, text), f"Hardcoded drive path in {fp}")
 
-        # Verify Apache-2.0 external layer never directly imports GPL Blender modules (`bpy` / `bmesh`)
-        external_py = [REPO_ROOT / "run_pipeline.py"] + sorted((REPO_ROOT / "pipeline").glob("*.py")) + sorted((REPO_ROOT / "workflows").glob("*.py"))
+        gre = REPO_ROOT / "gre"
+        registry = {gre / f"{module}.py" for module in GRE_CORE | GRE_BLENDER_WORKERS}
+        self.assertEqual(set(gre.rglob("*.py")), registry)
+        external_py = [REPO_ROOT / "run_pipeline.py"] + [
+            *sorted((REPO_ROOT / "pipeline").rglob("*.py")),
+            *sorted((REPO_ROOT / "workflows").rglob("*.py")),
+            *(gre / f"{module}.py" for module in sorted(GRE_CORE)),
+        ]
         for fp in external_py:
-            lines = fp.read_text(encoding="utf-8-sig").splitlines()
-            for idx, ln in enumerate(lines, start=1):
-                stripped = ln.strip()
-                if stripped.startswith(("import ", "from ")):
-                    self.assertNotRegex(
-                        stripped,
-                        r"^(import|from)\s+(bpy|bmesh|mathutils)\b",
-                        msg=f"Cross-process GPL boundary violation in {fp}:{idx}: {stripped}",
+            source = fp.read_text(encoding="utf-8-sig")
+            self.assertNotRegex(source, r"(?m)^[ \t]*(import|from)\s+(bpy|bmesh|mathutils|pymeshlab|curiomesh)\b",
+                                msg=f"Cross-process GPL boundary violation in {fp}")
+            for node in ast.walk(ast.parse(source, filename=str(fp))):
+                if isinstance(node, ast.Import):
+                    modules = [alias.name for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    modules = [node.module or ""]
+                    if node.module == "gre":
+                        modules.extend(f"gre.{alias.name}" for alias in node.names)
+                else:
+                    continue
+                for module in modules:
+                    root, _, submodule = module.partition(".")
+                    is_worker = root in {"blender_scripts", "gpl_workers"} or (
+                        root == "gre" and submodule.split(".", 1)[0] in GRE_BLENDER_WORKERS
                     )
+                    self.assertFalse(root in BLENDER_MODULES or is_worker,
+                                     f"Cross-process GPL import in {fp}:{node.lineno}")
 
         # Verify .gitignore covers local private data & assets
         gi_text = (REPO_ROOT / ".gitignore").read_text(encoding="utf-8")
         for req_rule in ("projects/", "*.glb", "*.blend", ".env", "knowledge/*.jsonl"):
             self.assertIn(req_rule, gi_text)
+
+    def test_gre_math_core_imports_in_standalone_python(self) -> None:
+        from pipeline.config import DEFAULT_BLENDER_EXE, require_blender
+
+        python = sys.executable
+        if importlib.util.find_spec("numpy") is None:
+            blender = Path(require_blender(DEFAULT_BLENDER_EXE))
+            names = ("python.exe",) if sys.platform == "win32" else ("python3", "python")
+            candidates = [candidate for name in names for candidate in blender.parent.glob(f"*/python/bin/{name}")]
+            self.assertTrue(candidates, "Standalone Blender Python with NumPy must be available")
+            python = str(candidates[-1])
+        code = (
+            "import importlib.util, sys; "
+            "assert importlib.util.find_spec('bpy') is None; "
+            "[importlib.import_module(module) for module in sys.argv[1:]]; "
+            "assert not {'bpy', 'bmesh', 'mathutils', 'pymeshlab', 'curiomesh'}.intersection(sys.modules)"
+        )
+        result = subprocess.run([python, "-c", code, *(f"gre.{name}" for name in sorted(GRE_CORE))],
+                                cwd=REPO_ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_knowledge_recall_actually_reorders_planners_from_jsonl(self) -> None:
         from pipeline.cloth_rig_agent_loop import ClothRigCriteria, agent_decide_cloth_rig_plan

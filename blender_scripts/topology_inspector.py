@@ -13,6 +13,13 @@ import numpy as np
 from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from blender_runtime import cycles_devices, junk_objects
+from gap_coverage_validator import check_shell_contract, sample_shells
+
 
 def _parse_args():
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
@@ -22,6 +29,8 @@ def _parse_args():
     p.add_argument("--out-json", required=True)
     p.add_argument("--debris-max-verts", type=int, default=24)
     p.add_argument("--sample-count", type=int, default=6000)
+    p.add_argument("--shell-samples", action="store_true")
+    p.add_argument("--triage", action="store_true")
     return p.parse_args(argv)
 
 
@@ -270,6 +279,7 @@ def inspect_mesh_object(mesh_obj, debris_max_verts=24):
 
     welded_non_manifold = sum(1 for e in bm_w.edges if not e.is_manifold and not e.is_boundary)
     welded_boundary = sum(1 for e in bm_w.edges if e.is_boundary)
+    non_manifold_verts = sum(1 for v in bm_w.verts if not v.is_manifold and not v.is_boundary)
     val_hist = Counter(len(v.link_edges) for v in bm_w.verts)
     welded_v = max(1, len(bm_w.verts))
     val4_ratio = round(val_hist.get(4, 0) / welded_v, 4)
@@ -338,6 +348,23 @@ def inspect_mesh_object(mesh_obj, debris_max_verts=24):
     uv_mat = _measure_diffuse_coverage(mesh_obj)
 
     pts = [mw @ v.co for v in me.vertices]
+    basis = mw.to_3x3()
+    normal_matrix = basis.inverted_safe().transposed()
+    world_areas = [p.area * abs(basis.determinant()) * (normal_matrix @ p.normal).length for p in me.polygons]
+    surface_area = sum(world_areas)
+    orientation = np.zeros((3, 3))
+    for poly, area in zip(me.polygons, world_areas):
+        normal = np.asarray((normal_matrix @ poly.normal).normalized())
+        orientation += area * np.outer(normal, normal)
+    dominance = float(np.linalg.eigvalsh(orientation)[-1] / surface_area) if surface_area else 0.0
+    extents = np.zeros(3)
+    if len(pts) >= 3:
+        coordinates = np.asarray(pts)
+        centered = coordinates - coordinates.mean(axis=0)
+        axes = np.linalg.eigh(centered.T @ centered)[1]
+        extents = np.sort(np.ptp(centered @ axes, axis=0))
+    thinness = 1.0 - float(extents[0] / extents[1]) if extents[1] > 1e-8 else 0.0
+    slenderness = float(extents[2] / max(extents[1], 1e-8)) if surface_area else 0.0
     dims = [0.0, 0.0, 0.0]
     if pts:
         dims = [
@@ -359,6 +386,11 @@ def inspect_mesh_object(mesh_obj, debris_max_verts=24):
         "debris_shells_count": debris_shells,
         "welded_non_manifold_edges": welded_non_manifold,
         "welded_boundary_edges": welded_boundary,
+        "welded_non_manifold_verts": non_manifold_verts,
+        "surface_area": surface_area,
+        "thin_sheet_score": thinness,
+        "slender_aspect_ratio": slenderness,
+        "planar_dominance_score": dominance,
         "degenerate_faces": degen_faces,
         "zero_length_edges": zero_edges,
         "loose_verts": loose_verts,
@@ -370,16 +402,19 @@ def inspect_mesh_object(mesh_obj, debris_max_verts=24):
         "unnormalized_weight_verts": unnormalized_weights,
         "zero_weight_verts": zero_weight_verts,
         "dims": dims,
+        "world_bbox": [[min(p[i] for p in pts) for i in range(3)],
+                       [max(p[i] for p in pts) for i in range(3)]] if pts else None,
         **rec_quads,
         **uv_mat,
     }
 
 
-def inspect_current_scene(reference_path="", debris_max_verts=24, sample_count=6000):
+def inspect_current_scene(reference_path="", debris_max_verts=24, sample_count=6000, *,
+                          shell_contract=None, include_shell_samples=False, max_shell_p95_pct=2.2,
+                          reference_shell_samples=None):
     sc = bpy.context.scene
     all_objs = list(sc.objects)
-    junk_names = {"icosphere", "棱角球", "cube", "立方体"}
-    junk_objs = [o.name for o in all_objs if o.name.split(".")[0].lower() in junk_names and len(getattr(o.data, "vertices", [])) <= 128]
+    junk_objs = [o.name for o in junk_objects(all_objs)]
     meshes = [o for o in all_objs if o.type == "MESH" and o.name not in junk_objs]
     arms = [o for o in all_objs if o.type == "ARMATURE"]
 
@@ -397,6 +432,9 @@ def inspect_current_scene(reference_path="", debris_max_verts=24, sample_count=6
         "meshes": mesh_reports,
     }
 
+    if include_shell_samples:
+        summary["shell_samples"] = sample_shells(meshes)
+
     if reference_path and Path(reference_path).is_file() and meshes:
         cand_objs = list(meshes)
         before_ptrs = {o.as_pointer() for o in sc.objects}
@@ -410,9 +448,19 @@ def inspect_current_scene(reference_path="", debris_max_verts=24, sample_count=6
                     sc.collection.objects.link(ro)
                     ref_objs.append(ro)
         else:
-            bpy.ops.import_scene.gltf(filepath=str(reference_path))
+            if rlow.endswith(".obj"):
+                bpy.ops.wm.obj_import(filepath=str(reference_path))
+            else:
+                bpy.ops.import_scene.gltf(filepath=str(reference_path))
             ref_objs = [o for o in sc.objects if o.as_pointer() not in before_ptrs and o.type == "MESH"]
+        ref_junk = junk_objects([o for o in sc.objects if o.as_pointer() not in before_ptrs])
+        ref_objs = [o for o in ref_objs if o not in ref_junk]
         summary["fidelity"] = compute_symmetric_fidelity(cand_objs, ref_objs, sample_count=sample_count)
+        if shell_contract is not None:
+            samples = reference_shell_samples if reference_shell_samples is not None else sample_shells(ref_objs)
+            summary["shell_validation"] = check_shell_contract(
+                cand_objs, samples, shell_contract, max_p95_pct=max_shell_p95_pct
+            )
         for ro in [o for o in sc.objects if o.as_pointer() not in before_ptrs]:
             bpy.data.objects.remove(ro, do_unlink=True)
     return summary
@@ -425,7 +473,19 @@ def main():
         reference_path=args.reference,
         debris_max_verts=args.debris_max_verts,
         sample_count=args.sample_count,
+        include_shell_samples=args.shell_samples,
     )
+    if args.triage:
+        addon = bpy.context.preferences.addons.get("cycles")
+        report["available_backends"] = {
+            "blender": True,
+            "blender_mesh_tools": hasattr(bpy.types, "DecimateModifier"),
+            "blender_quadriflow": "quadriflow_remesh" in dir(bpy.ops.object),
+            "cycles_devices_detected": cycles_devices(addon.preferences) if addon else [],
+        }
+        bounds = [mesh["world_bbox"] for mesh in report["meshes"] if mesh["world_bbox"]]
+        report["bbox_diag_m"] = math.hypot(*(max(b[1][i] for b in bounds) - min(b[0][i] for b in bounds)
+                                          for i in range(3))) if bounds else 0.0
     out_p = Path(args.out_json)
     out_p.parent.mkdir(parents=True, exist_ok=True)
     out_p.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

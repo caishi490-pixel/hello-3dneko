@@ -1,4 +1,18 @@
-# 多视角高清贴图反投实战 SOP（`uv-hd-retex`）
+# UV baking and HD retexture
+
+## Shared-atlas PBR baking
+
+Run `python run_pipeline.py uv-bake --high "<high>" --low "<low>" --out "<work>"`. The worker fits each part's islands into disjoint padded atlas cells, merges a temporary target, and bakes Diffuse, Normal, Roughness, Metallic, and AO once each. Original parts keep their geometry and share the atlas material. The report records the temporary face ranges, bake count, and device.
+
+Review `ray_valid_hit_pct`, `cross_layer_mis_hit_pct`, `slope_decode_angle_error_deg`, and `tangent_sign_flipped_pct` independently. Correct measured wrong-layer hits through cage and ray settings. Use vector inversion only for a confirmed tangent-sign issue with no wrong-layer hits. A non-calibrated slope reports null. Zero ray distance uses the Blender unlimited-ray setting independently of cage extrusion.
+
+For HD retexture, `prepare --region-profile "<profile.json>"` accepts ordered rules and positive weights. See `templates/uv_regions/generic.json` for the default and `corset.json` for an opt-in garment profile.
+
+## Visual polish and focal UVs
+
+Audit texel density and matched-camera closeups before editing. If the eye, a motif, or another focal island lacks pixels, give it a dedicated material and UV region. Keep welded geometry and face-corner UV seams intact during edits. Use the reference render and approved 2D design to fix framing and feature placement during image editing, then inspect alpha and landmark alignment before reprojection. Use the texture channels or Toon shader to control metallic accents and specular glare. Verify the result by reloading the baked glTF and rendering the same cameras.
+
+## HD reprojection
 
 当服装或配件的低模拓扑已经达标（例如四边面率 > 99%），但原有贴图发糊、需要**严格保留原几何轮廓与布线**并换上一套高清纹理时，按本流程执行多视角拍摄 → 锁轮廓透明重绘 → 遮挡安全反投烘焙。
 

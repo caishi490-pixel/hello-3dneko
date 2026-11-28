@@ -1,0 +1,11 @@
+{
+  "rules": [
+    {"label": "front_panel", "when": {"facing": {"gt": 0.45}}},
+    {"label": "lacing", "when": {"height": {"gt": 0.60, "lt": 0.93}, "width": {"gt": 0.38, "lt": 0.64}, "facing": {"gt": 0.28}, "depth": {"gt": 0.5}}},
+    {"label": "bow_and_ribbon", "when": {"height": {"gt": 0.24, "lt": 0.76}, "width": {"lt": 0.47}}},
+    {"label": "tassel", "when": {"height": {"lte": 0.24}}},
+    {"label": "gold_filigree", "when": {"red_minus_blue": {"gt": 0.045}, "height": {"gte": 0.59}}},
+    {"label": "bell_and_beads", "when": {"red_minus_blue": {"gt": 0.045}, "height": {"lt": 0.59}}}
+  ],
+  "weights": {"front_panel": 1.18, "lacing": 1.30, "gold_filigree": 1.25, "bow_and_ribbon": 1.27, "bell_and_beads": 1.32, "tassel": 1.30}
+}

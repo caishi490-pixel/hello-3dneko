@@ -13,6 +13,7 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from topology_inspector import inspect_current_scene, load_scene_file  # noqa: E402
+from blender_runtime import configure_cycles
 
 
 def _parse_args():
@@ -72,18 +73,7 @@ def _render_qc_views(out_dir, prefix="cand", samples=28, res=768, mode="both"):
     sc.collection.objects.link(cam)
     sc.camera = cam
 
-    sc.render.engine = "CYCLES"
-    sc.cycles.device = "CPU"
-    try:
-        prefs = bpy.context.preferences.addons["cycles"].preferences
-        prefs.compute_device_type = "OPTIX"
-        prefs.refresh_devices()
-        if any(d.type != "CPU" for d in prefs.devices):
-            for d in prefs.devices:
-                d.use = d.type != "CPU"
-            sc.cycles.device = "GPU"
-    except Exception:
-        sc.cycles.device = "CPU"
+    configure_cycles(sc)
     sc.cycles.samples = samples
     sc.cycles.use_denoising = True
     sc.render.resolution_x = res
@@ -208,6 +198,8 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
     )
 
     welded_non_man = sum(m["welded_non_manifold_edges"] for m in meshes)
+    boundary_edges = sum(m["welded_boundary_edges"] for m in meshes)
+    validation_mode = criteria.get("validation_mode")
     degen = sum(m["degenerate_faces"] for m in meshes)
     zero_e = sum(m["zero_length_edges"] for m in meshes)
     loose_v = sum(m["loose_verts"] for m in meshes)
@@ -217,6 +209,7 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
     )
 
     fidelity = glb_report.get("fidelity") or {"valid": False}
+    shell_validation = glb_report.get("shell_validation")
     has_uv = all(m["has_uv"] for m in meshes)
     uv_oob = sum(m["uv_oob_loops"] for m in meshes)
     tex_count = sum(len(m["textures"]) for m in meshes)
@@ -227,7 +220,7 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
 
     unnorm_w = sum(m["unnormalized_weight_verts"] for m in meshes)
     zero_w = sum(m["zero_weight_verts"] for m in meshes)
-    junk_count = len(glb_report.get("junk_objects", []))
+    junk = sorted(set(glb_report.get("junk_objects", []) + (blend_report or {}).get("junk_objects", [])))
 
     blocking = []
     warnings = []
@@ -259,6 +252,10 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
     else:
         blocking.append("Pillar1 Geometric Fidelity: failed to evaluate BVH surface distance.")
 
+    if shell_validation and not shell_validation["passed"]:
+        p1_ok = False
+        blocking.extend(shell_validation["issues"])
+
     # 2. Topology quality
     p2_ok = True
     if eff_quad_ratio < criteria["min_quad_ratio"]:
@@ -278,6 +275,9 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
     if welded_non_man > criteria["max_welded_non_manifold"]:
         p3_ok = False
         blocking.append(f"Pillar3 Manifold: welded_non_manifold_edges={welded_non_man}")
+    if validation_mode == "alpha-wrap" and boundary_edges:
+        p3_ok = False
+        blocking.append(f"Pillar3 Watertight envelope: boundary_edges={boundary_edges}")
     if degen > 0 or zero_e > 0 or loose_v > 0:
         p3_ok = False
         blocking.append(f"Pillar3 Cleanliness: degen={degen}, zero_edges={zero_e}, loose_verts={loose_v}")
@@ -298,10 +298,10 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
 
     # 5. UV & materials
     p5_ok = True
-    if not has_uv or uv_oob > 0:
+    if validation_mode != "alpha-wrap" and (not has_uv or uv_oob > 0):
         p5_ok = False
         blocking.append(f"Pillar5 UV: has_uv={has_uv}, uv_oob_loops={uv_oob}")
-    if tex_count < 1:
+    if validation_mode not in {"qecd-with-texture", "alpha-wrap"} and tex_count < 1:
         p5_ok = False
         blocking.append("Pillar5 Materials: zero textures attached to candidate materials.")
     if min_cov is not None and min_cov < criteria["min_bake_coverage"]:
@@ -310,9 +310,9 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
 
     # 6. Rigging / engine readiness
     p6_ok = True
-    if junk_count > 0:
+    if junk:
         p6_ok = False
-        blocking.append(f"Pillar6 Engine Hygiene: found junk objects {glb_report.get('junk_objects')}")
+        blocking.append(f"Pillar6 Engine Hygiene: found junk objects {junk}")
     if unnorm_w > 0 or zero_w > 0:
         p6_ok = False
         blocking.append(f"Pillar6 Rig Weights: unnormalized={unnorm_w}, zero_weight={zero_w}")
@@ -329,7 +329,7 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
         "blocking_failures": blocking,
         "warnings": warnings,
         "pillars": {
-            "1_geometric_fidelity": {"passed": p1_ok, **fidelity},
+            "1_geometric_fidelity": {"passed": p1_ok, **fidelity, "shell_validation": shell_validation},
             "2_topology_quality": {
                 "passed": p2_ok,
                 "blend_quad_ratio": blend_quad_ratio,
@@ -345,6 +345,7 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
             "3_manifold_cleanliness": {
                 "passed": p3_ok,
                 "welded_non_manifold_edges": welded_non_man,
+                "welded_boundary_edges": boundary_edges,
                 "degenerate_faces": degen,
                 "zero_length_edges": zero_e,
                 "loose_verts": loose_v,
@@ -367,7 +368,7 @@ def evaluate_six_pillars(glb_report, blend_report, criteria):
             },
             "6_rig_engine_ready": {
                 "passed": p6_ok,
-                "junk_objects": glb_report.get("junk_objects", []),
+                "junk_objects": junk,
                 "unnormalized_weight_verts": unnorm_w,
                 "zero_weight_verts": zero_w,
                 "glb_roundtrip_ok": True,
@@ -391,7 +392,11 @@ def main():
 
     # Always validate the round-tripped GLB independently as the true engine artifact
     load_scene_file(args.candidate_glb)
-    glb_report = inspect_current_scene(reference_path=args.reference_glb)
+    glb_report = inspect_current_scene(
+        reference_path=args.reference_glb, shell_contract=criteria.get("shell_contract", {}),
+        max_shell_p95_pct=criteria["max_p95_dev_pct"],
+        reference_shell_samples=criteria.get("reference_shell_samples"),
+    )
     renders.update(_render_qc_views(args.renders_dir, prefix=prefix, mode="shaded" if renders else "both"))
 
     verdict = evaluate_six_pillars(glb_report, blend_report, criteria)

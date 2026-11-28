@@ -18,9 +18,15 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import DEFAULT_BLENDER_EXE, REPO_ROOT, now_iso
+from .asset_triage import route_parts
+from .budget_allocator import allocate_object_budgets
+from .config import DEFAULT_BLENDER_EXE, REPO_ROOT, now_iso, require_blender
 from .experiment_ledger import record_experiment
 from .knowledge_recall import apply_priors_to_candidates, load_strategy_priors
+from .retopo_backends import (
+    AUTOREMESHER_ROUTE, PYMESHLAB_ROUTES, AutoRemesherAdapter, PyMeshLabAdapter, permits_alpha_wrap,
+)
+from .sandbox import ShortPathWorkspace, run_staged_blender_job
 
 
 INSPECTOR_SCRIPT = REPO_ROOT / "blender_scripts" / "topology_inspector.py"
@@ -29,6 +35,8 @@ VALIDATOR_SCRIPT = REPO_ROOT / "blender_scripts" / "topology_validator.py"
 DEFAULT_KNOWLEDGE_DIR = REPO_ROOT / "knowledge"
 
 STRATEGY_ROUTES: dict[str, str] = {
+    AUTOREMESHER_ROUTE: AUTOREMESHER_ROUTE,
+    **{route: "pymeshlab_route" for route in PYMESHLAB_ROUTES.values()},
     "clean_weld_quadify": "quadify_only_route",
     "quadriflow_sharp_flow_refine_bake": "quadriflow_route",
     "quadriflow_smooth_flow_refine_bake": "quadriflow_route",
@@ -84,11 +92,20 @@ def _run_blender(
     timeout: int = 600,
 ) -> tuple[bool, str]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    cmd = [blender_exe, "-b", "--python-exit-code", "1", "--python", str(script), "--"] + args
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
-    combined = proc.stdout + ("\n---STDERR---\n" + proc.stderr if proc.stderr else "")
+    command = [require_blender(blender_exe), "-b", "--python-exit-code", "1", "--python", str(script), "--"]
+
+    def invoke(worker_args):
+        proc = subprocess.run(command + worker_args, capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=timeout, check=False)
+        return proc.returncode == 0, proc.stdout + ("\n---STDERR---\n" + proc.stderr if proc.stderr else "")
+
+    if script.name in {"topology_toolkit.py", "uv_bake_toolkit.py", "topology_validator.py", "uv_bake_validator.py"}:
+        with ShortPathWorkspace(log_path.parent) as workspace:
+            ok, combined = run_staged_blender_job(args, workspace, invoke)
+    else:
+        ok, combined = invoke(args)
     log_path.write_text(combined, encoding="utf-8")
-    return proc.returncode == 0, combined
+    return ok, combined
 
 
 def _bbox_diag_from_report(report: dict[str, Any]) -> float:
@@ -127,11 +144,32 @@ def agent_decide_repair_plan(
     if has_junk:
         prefix_actions.append({"action": "cleanup_scene_for_engine", "params": {"drop_numbered_duplicates": False}})
 
+    operation = baseline_metrics.get("pymeshlab_operation")
+    if operation:
+        route = PYMESHLAB_ROUTES[operation]
+        if route in banned_strategies or get_strategy_route(route) in (banned_routes or set()):
+            raise RuntimeError(f"Requested PyMeshLab route rejected: {route}")
+        params = {"operation": operation, "max_p95_dev_pct": criteria.max_p95_dev_pct}
+        if operation == "qecd-with-texture":
+            params["target_faces"] = criteria.max_faces
+        actions = prefix_actions + [{"action": "pymeshlab_retopo", "params": params}]
+        if operation == "close-holes":
+            actions.append({"action": "unwrap_and_bake_textures", "params": {
+                "texture_size": 2048, "cage_extrusion": 0.003, "max_ray_distance": 0.018,
+            }})
+        return route, actions, f"Run isolated PyMeshLab {operation} with its purpose-specific acceptance criteria."
+
     # Candidate ordered strategy portfolio (adapted dynamically by last failure analysis)
     target_mid = max(criteria.min_faces + 1500, min(14000, criteria.max_faces - 4000))
     target_high = min(criteria.max_faces - 1500, max(16000, int(criteria.max_faces * 0.85)))
 
     candidates: list[tuple[str, list[dict[str, Any]], str]] = []
+    parts = baseline_metrics.get("parts_routing", [])
+    tags = set(baseline_metrics.get("asset_tags", []))
+    auto_parts = [
+        part["object_name"] for part in parts
+        if part["recommended_retopo_route"] == AUTOREMESHER_ROUTE
+    ]
 
     if faces <= criteria.max_faces and avg_quad >= criteria.min_quad_ratio and non_man == 0:
         candidates.append(
@@ -145,6 +183,27 @@ def agent_decide_repair_plan(
                 "Input already near quad target; run non-destructive seam weld, debris sanitize, and quadify.",
             )
         )
+
+    if auto_parts:
+        candidates.append((
+            AUTOREMESHER_ROUTE,
+            prefix_actions + [
+                {"action": "sanitize_mesh", "params": {"weld_seams": True, "min_shell_verts": 0}},
+                {"action": "heal_manifold", "params": {"max_hole_edges": 24, "min_shell_verts": 0}},
+                {"action": "autoremesher_retopo", "params": {
+                    "target_faces": target_high, "auto_parts": auto_parts,
+                    "use_preserve_sharp": True, "max_p95_dev_pct": criteria.max_p95_dev_pct,
+                }},
+                {"action": "sanitize_mesh", "params": {"weld_seams": True, "min_shell_verts": 0}},
+                {"action": "heal_manifold", "params": {"max_hole_edges": 12, "min_shell_verts": 0}},
+                {"action": "unwrap_and_bake_textures", "params": {
+                    "texture_size": 2048, "angle_limit_deg": 66.0, "island_margin": 0.004,
+                    "cage_extrusion": 0.003, "max_ray_distance": 0.018,
+                }},
+            ],
+            "Use anisotropic AutoRemesher for eligible hard parts with per-shell coverage; "
+            "use the local QuadriFlow route for other parts before shared baking.",
+        ))
 
     # Primary flagship strategy: pre-heal + sharp Quadriflow + normal-aware shrinkwrap + tangential quad-flow relaxation + ORM bake
     candidates.append(
@@ -478,12 +537,26 @@ def agent_decide_repair_plan(
     )
 
     if knowledge_dir is not None and not attempt_history:
-        priors = load_strategy_priors(knowledge_dir, "retopo")
+        priors = load_strategy_priors(knowledge_dir, "retopo", set(baseline_metrics.get("asset_tags", [])))
         candidates = apply_priors_to_candidates(candidates, priors)
 
+    forbidden = {route for part in parts for route in part["forbidden_routes"]}
+    if auto_parts:
+        # Thin or dirty members of a mixed assembly are excluded individually.
+        forbidden.discard(AUTOREMESHER_ROUTE)
+    if "multi_part" in tags and "single_shell_envelope" not in tags:
+        forbidden.add("voxel_seal_quadriflow_bake")
+    if len(parts) == 1 and candidates[0][0] != "clean_weld_quadify":
+        preferred = parts[0]["recommended_retopo_route"]
+        if {"thin_sheet", "minor_nonmanifold", "hard_surface"} & tags:
+            candidates.sort(key=lambda entry: entry[0] != preferred)
+    elif "multi_strand" in tags:
+        candidates.sort(key=lambda entry: entry[0] != "quadriflow_healed_post_clean_bake")
+    elif auto_parts:
+        candidates.sort(key=lambda entry: entry[0] not in {"clean_weld_quadify", AUTOREMESHER_ROUTE})
     banned_r = banned_routes or set()
     for strat_id, actions, rationale in candidates:
-        if strat_id not in banned_strategies and get_strategy_route(strat_id) not in banned_r:
+        if strat_id not in banned_strategies | forbidden and get_strategy_route(strat_id) not in banned_r:
             return strat_id, actions, rationale
 
     raise RuntimeError("No unbanned repair strategies or routes left within Agent Planner portfolio.")
@@ -504,6 +577,12 @@ def analyze_failure_and_rollback(
 
     if not toolkit_ok:
         err_tail = "\n".join(toolkit_log.splitlines()[-6:]).lower()
+        for reason in ("autoremesher_timeout", "autoremesher_shell_coverage", "autoremesher_execution_failed",
+                       "autoremesher_budget_exceeded", "pymeshlab_nonmanifold", "pymeshlab_timeout",
+                       "pymeshlab_shell_coverage", "pymeshlab_uv_contract", "pymeshlab_budget_exceeded",
+                       "pymeshlab_close_holes_no_change"):
+            if reason in err_tail:
+                failure_classes.append(reason)
         if "quadriflow_remesh" in toolkit_log.lower() and "failed" in err_tail:
             failure_classes.append("quadriflow_execution_failed")
         if "non-manifold" in err_tail or "manifold" in err_tail:
@@ -551,7 +630,7 @@ def _decompose_partial_capabilities(
         reusable_steps.extend(
             step["action"]
             for step in actions
-            if step["action"] in ("quadriflow_retopo", "weld_and_quadify", "decimate_and_quadify")
+            if step["action"] in ("quadriflow_retopo", "autoremesher_retopo", "weld_and_quadify", "decimate_and_quadify")
         )
     if pillars.get("5_uv_and_materials", {}).get("passed"):
         reusable_steps.extend(step["action"] for step in actions if step["action"] == "unwrap_and_bake_textures")
@@ -588,6 +667,7 @@ def triage_and_persist_outcome(
             "score": best_attempt["score"],
             "actions": winning_actions or [],
             "baseline_faces": baseline_metrics.get("total_faces_raw"),
+            "asset_tags": baseline_metrics.get("asset_tags", []),
             "final_pillars": best_attempt["verdict"].get("pillars", {}),
         }
         _append_jsonl(knowledge_dir / "learned_recipes.jsonl", recipe)
@@ -671,6 +751,8 @@ def run_closed_loop_retopo(
     blender_exe: str = DEFAULT_BLENDER_EXE,
     knowledge_dir: Path | None = None,
     dry_run: bool = False,
+    shell_contract: dict[str, Any] | None = None,
+    pymeshlab_operation: str | None = None,
 ) -> dict[str, Any]:
     """Execute the full closed-loop retopology & independent validation workflow."""
     t_start = time.monotonic()
@@ -679,6 +761,12 @@ def run_closed_loop_retopo(
     work_dir.mkdir(parents=True, exist_ok=True)
     criteria = criteria or RetopoCriteria()
     kdir = Path(knowledge_dir).resolve() if knowledge_dir else DEFAULT_KNOWLEDGE_DIR
+    envelope = (shell_contract or {}).get("single_shell_envelope", False)
+    if (pymeshlab_operation == "alpha-wrap" or envelope) and not permits_alpha_wrap(shell_contract):
+        return {"status": "blocked", "reason": "pymeshlab_envelope_requires_opt_in",
+                "detail": "A single-shell envelope requires explicit intent and cannot include separation groups or gap rays."}
+    if envelope and pymeshlab_operation not in (None, "alpha-wrap"):
+        return {"status": "blocked", "reason": "pymeshlab_conflicting_operation"}
 
     checkpoints_dir = work_dir / "checkpoints"
     attempts_dir = work_dir / "attempts"
@@ -688,11 +776,12 @@ def run_closed_loop_retopo(
     deliverables_dir.mkdir(exist_ok=True)
 
     criteria_path = work_dir / "acceptance_criteria.json"
-    criteria_path.write_text(json.dumps(criteria.to_dict(), indent=2), encoding="utf-8")
+    criteria_data = {**criteria.to_dict(), "shell_contract": shell_contract or {}}
+    criteria_path.write_text(json.dumps(criteria_data, indent=2), encoding="utf-8")
 
     reference_copy = checkpoints_dir / f"00_raw_reference{input_asset.suffix.lower()}"
-    if not reference_copy.exists() and input_asset.is_file():
-        shutil.copy2(input_asset, reference_copy)
+    if input_asset.is_file():
+        ShortPathWorkspace.publish_file(input_asset, reference_copy)
 
     if dry_run:
         return {
@@ -701,22 +790,66 @@ def run_closed_loop_retopo(
             "work_dir": str(work_dir),
             "max_iterations": max_iterations,
             "criteria": criteria.to_dict(),
+            "pymeshlab_operation": pymeshlab_operation,
         }
 
     if not input_asset.is_file():
         raise FileNotFoundError(f"Missing input asset: {input_asset}")
+
+    pymeshlab = PyMeshLabAdapter.discover()
+    if pymeshlab_operation and not pymeshlab:
+        return {"status": "blocked", "reason": "pymeshlab_worker_unavailable"}
+    if envelope and pymeshlab:
+        pymeshlab_operation = "alpha-wrap"
+    if pymeshlab_operation:
+        criteria_data.update(validation_mode=pymeshlab_operation, min_quad_ratio=0.0, min_valence4_ratio=0.0)
+    reproducible_command = (
+        f'python run_pipeline.py retopo --input "{input_asset}" --out "{work_dir}" --max-iters {max_iterations}'
+        f" --min-faces {criteria.min_faces} --max-faces {criteria.max_faces}"
+        f" --min-quad-ratio {criteria.min_quad_ratio} --min-valence4-ratio {criteria.min_valence4_ratio}"
+    )
+    if shell_contract:
+        contract_path = work_dir / "shell_contract.json"
+        contract_path.write_text(json.dumps(shell_contract, ensure_ascii=False, indent=2), encoding="utf-8")
+        reproducible_command += f' --shell-contract "{contract_path}"'
+    if pymeshlab_operation:
+        reproducible_command += f" --pymeshlab-operation {pymeshlab_operation}"
+    experiment_config = {"task_type": "retopo", "asset": input_asset.name, "criteria": criteria_data}
 
     # Step 1: Geometry Detector on raw model
     baseline_json = work_dir / "01_baseline_detector.json"
     ok_det, det_log = _run_blender(
         blender_exe,
         INSPECTOR_SCRIPT,
-        ["--input", str(reference_copy), "--out-json", str(baseline_json)],
+        ["--input", str(reference_copy), "--out-json", str(baseline_json), "--triage", "--shell-samples"],
         work_dir / "01_baseline_detector.log",
     )
     if not ok_det:
         raise RuntimeError(f"Initial Geometry Detector failed:\n{det_log[-1000:]}")
     baseline_metrics = json.loads(baseline_json.read_text(encoding="utf-8-sig"))
+    baseline_metrics["available_backends"]["autoremesher_cli"] = AutoRemesherAdapter.discover() is not None
+    baseline_metrics["available_backends"]["pymeshlab_worker"] = pymeshlab is not None
+    if pymeshlab_operation:
+        baseline_metrics["pymeshlab_operation"] = pymeshlab_operation
+    criteria_path.write_text(json.dumps({
+        **criteria_data, "reference_shell_samples": baseline_metrics.pop("shell_samples"),
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    parts = route_parts(baseline_metrics["meshes"], baseline_metrics["available_backends"])
+    tags = {"multi_part" if baseline_metrics["mesh_count"] > 1 else "single_prop"}
+    tags.update(tag for part in parts for tag in part["asset_tags"])
+    if shell_contract:
+        tags.update(shell_contract.get("asset_tags", []))
+        if shell_contract.get("single_shell_envelope"):
+            tags.add("single_shell_envelope")
+        if shell_contract.get("separation_groups") or shell_contract.get("require_gap_preservation"):
+            tags.add("require_gap_preservation")
+    baseline_metrics["asset_tags"] = sorted(tags)
+    baseline_metrics["parts_routing"] = parts
+    baseline_json.write_text(json.dumps(baseline_metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    preserve_shells = (
+        ("multi_part" in tags or "require_gap_preservation" in tags)
+        and "single_shell_envelope" not in tags
+    )
 
     active_baseline = checkpoints_dir / f"active_baseline{input_asset.suffix.lower()}"
     shutil.copy2(reference_copy, active_baseline)
@@ -776,12 +909,35 @@ def run_closed_loop_retopo(
                 winning_strategy_id=best_attempt.get("strategy_id", "") if best_attempt else "",
                 failure_reasons=[bf for a in attempt_history for bf in (a.get("verdict") or {}).get("blocking_failures", [])] or [str(exc)],
                 seed=0,
-                config_payload={"task_type": "retopo", "asset": input_asset.name, "criteria": criteria.to_dict()},
-                reproducible_command=f"python run_pipeline.py retopo --input \"{input_asset}\" --out \"{work_dir}\" --max-iters {max_iterations}",
+                config_payload=experiment_config,
+                reproducible_command=reproducible_command,
             )
             return fail_report
 
         iter_dir = attempts_dir / f"iter_{it:02d}_{strat_id}"
+        closed_objects = [
+            mesh["name"] for mesh in baseline_metrics["meshes"]
+            if mesh["welded_boundary_edges"] == 0 and mesh["welded_non_manifold_edges"] == 0
+        ]
+        for step in actions:
+            params = step.get("params") or {}
+            if preserve_shells and step["action"] in {"sanitize_mesh", "heal_manifold"}:
+                params["min_shell_verts"] = 0
+            if step["action"] == "heal_manifold" and closed_objects:
+                params["closed_objects"] = closed_objects
+            if step["action"] in {"quadriflow_retopo", "autoremesher_retopo"} and len(parts) > 1:
+                params["per_mesh_preserve_sharp"] = {
+                    part["object_name"]: "hard_surface" in part["asset_tags"]
+                    for part in parts
+                    if {"hard_surface", "thin_sheet", "minor_nonmanifold"} & set(part["asset_tags"])
+                }
+            if "target_faces" in params:
+                total = min(params["target_faces"], criteria.max_faces)
+                meshes = baseline_metrics["meshes"]
+                params["target_faces"] = total
+                params["per_mesh_targets"] = allocate_object_budgets(
+                    [{**mesh, "part_id": mesh["name"]} for mesh in meshes], total
+                )
         iter_dir.mkdir(parents=True, exist_ok=True)
         pre_ckpt = checkpoints_dir / f"ckpt_pre_iter_{it:02d}{active_baseline.suffix.lower()}"
         shutil.copy2(active_baseline, pre_ckpt)
@@ -802,7 +958,11 @@ def run_closed_loop_retopo(
             "output_glb": str(cand_glb),
             "execution_log": str(exec_log),
             "actions": actions,
+            "shell_contract": shell_contract or {},
+            "max_p95_dev_pct": criteria.max_p95_dev_pct,
         }
+        if pymeshlab_operation:
+            plan_payload["pymeshlab_python"] = pymeshlab.python
         plan_json.write_text(json.dumps(plan_payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
         tk_ok, tk_log = _run_blender(
@@ -861,6 +1021,8 @@ def run_closed_loop_retopo(
                 if qc_dst.exists():
                     shutil.rmtree(qc_dst)
                 shutil.copytree(iter_dir / "qc_renders", qc_dst)
+            if (iter_dir / "baked_textures").is_dir():
+                shutil.copytree(iter_dir / "baked_textures", deliverables_dir / "textures", dirs_exist_ok=True)
 
             triage = triage_and_persist_outcome(
                 "SUCCESS",
@@ -907,8 +1069,8 @@ def run_closed_loop_retopo(
                 winning_strategy_id=strat_id,
                 failure_reasons=[bf for a in attempt_history for bf in (a.get("verdict") or {}).get("blocking_failures", [])],
                 seed=0,
-                config_payload={"task_type": "retopo", "asset": input_asset.name, "criteria": criteria.to_dict()},
-                reproducible_command=f"python run_pipeline.py retopo --input \"{input_asset}\" --out \"{work_dir}\" --max-iters {max_iterations}",
+                config_payload=experiment_config,
+                reproducible_command=reproducible_command,
             )
             return result
 
@@ -931,6 +1093,7 @@ def run_closed_loop_retopo(
                 "route_family": route,
                 "score": cur_score,
                 "route_banned": cur_score < 50.0,
+                "asset_tags": baseline_metrics["asset_tags"],
                 **err_analysis,
             },
         )
@@ -985,7 +1148,7 @@ def run_closed_loop_retopo(
         winning_strategy_id=best_attempt.get("strategy_id", "") if best_attempt else "",
         failure_reasons=[bf for a in attempt_history for bf in (a.get("verdict") or {}).get("blocking_failures", [])],
         seed=0,
-        config_payload={"task_type": "retopo", "asset": input_asset.name, "criteria": criteria.to_dict()},
-        reproducible_command=f"python run_pipeline.py retopo --input \"{input_asset}\" --out \"{work_dir}\" --max-iters {max_iterations}",
+        config_payload=experiment_config,
+        reproducible_command=reproducible_command,
     )
     return fail_report

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import string
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +13,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+BLENDER_INSTALL_HINT = "Set HELLO_3DNEKO_BLENDER_EXE to the path of your local Blender executable."
 
 
 def _env_first(*keys: str, default: str = "") -> str:
@@ -33,13 +35,17 @@ def _discover_blender_exe() -> str:
         return found
 
     if os.name == "nt":
-        for prog_env in ("ProgramFiles", "ProgramW6432"):
-            base = os.environ.get(prog_env, "").strip()
-            if not base:
-                continue
-            bf_dir = Path(base) / "Blender Foundation"
-            if bf_dir.is_dir():
-                for candidate in sorted(bf_dir.glob("Blender */blender.exe"), reverse=True):
+        roots = [Path(value) for key in ("ProgramW6432", "ProgramFiles", "ProgramFiles(x86)")
+                 if (value := os.environ.get(key))]
+        for letter in string.ascii_uppercase[2:]:
+            drive = Path(f"{letter}:/")
+            if drive.is_dir():
+                roots.extend((drive / "Program Files", drive, drive / "Apps", drive / "Tools"))
+        for root in dict.fromkeys(roots):
+            candidates = [root / "Blender" / "blender.exe"]
+            candidates.extend(sorted((root / "Blender Foundation").glob("Blender */blender.exe"), reverse=True))
+            for candidate in candidates:
+                if candidate.is_file():
                     return str(candidate)
         return "blender.exe"
 
@@ -50,6 +56,17 @@ def _discover_blender_exe() -> str:
 
 
 DEFAULT_BLENDER_EXE = _discover_blender_exe()
+
+
+def require_blender(executable: str) -> str:
+    if Path(executable).is_file():
+        return str(Path(executable).resolve())
+    found = shutil.which(executable)
+    if found:
+        return found
+    raise FileNotFoundError(f"Blender executable unavailable. {BLENDER_INSTALL_HINT}")
+
+
 DEFAULT_HYPER3D_CMD = _env_first(
     "HELLO_3DNEKO_HYPER3D_CMD",
     "ANIME3D_HYPER3D_CMD",
@@ -94,7 +111,7 @@ class BlenderSettings:
     target_height: float = 1.56
     render_samples: int = 48
     render_resolution: int = 896
-    cycles_device_type: str = "OPTIX"
+    cycles_device_type: str = "AUTO"
     bake_resolution: int = 2048
     eye_map_resolution: int = 1024
 

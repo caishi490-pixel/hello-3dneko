@@ -17,7 +17,7 @@
 在此目录运行。将 Blender 路径改为本机安装位置，输出目录使用一个新的或空的目录。
 
 ```powershell
-$blender = 'X:/path/to/blender.exe'
+$blender = $env:HELLO_3DNEKO_BLENDER_EXE
 python ./reproduce.py --blender $blender --output-dir ./reproduced
 ```
 

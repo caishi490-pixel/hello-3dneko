@@ -2,20 +2,20 @@
 
 import argparse
 import json
+import os
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 
 def _load_font(size: int, bold: bool = False):
-    candidates = (
-        [r"C:\Windows\Fonts\msyhbd.ttc", r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\msyh.ttc"]
-        if bold
-        else [r"C:\Windows\Fonts\msyh.ttc", r"C:\Windows\Fonts\simhei.ttf", r"C:\Windows\Fonts\segoeui.ttf"]
-    )
-    for path in candidates:
-        if Path(path).exists():
-            return ImageFont.truetype(path, size=size)
+    system_root = os.environ.get("WINDIR")
+    if system_root:
+        names = ("msyhbd.ttc", "simhei.ttf", "msyh.ttc") if bold else ("msyh.ttc", "simhei.ttf", "segoeui.ttf")
+        for name in names:
+            path = Path(system_root) / "Fonts" / name
+            if path.is_file():
+                return ImageFont.truetype(str(path), size=size)
     return ImageFont.load_default()
 
 

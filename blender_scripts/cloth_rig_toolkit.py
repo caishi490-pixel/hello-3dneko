@@ -24,6 +24,7 @@ from cloth_rig_inspector import (  # noqa: E402
     strip_bone_shape_junk,
 )
 from topology_inspector import load_scene_file  # noqa: E402
+from blender_runtime import remove_export_junk
 
 
 def _parse_args():
@@ -1546,11 +1547,10 @@ def _action_repair_weight_anomalies(arm_obj, skin_objs, garment_obj, inspection,
 
 
 def _export_rigged_bundle(arm_obj, skin_objs, face_objs, garment_obj, out_blend: Path, out_glb: Path):
-    # Clear bone custom_shape before glTF export so exporter doesn't pack stray Icosphere meshes
-    for pb in arm_obj.pose.bones:
-        pb.custom_shape = None
+    keep_names = [obj.name for obj in [arm_obj, *skin_objs, *face_objs, garment_obj]]
+    remove_export_junk()
     bpy.ops.object.select_all(action="DESELECT")
-    keep = [arm_obj] + skin_objs + face_objs + [garment_obj]
+    keep = [bpy.context.scene.objects[name] for name in keep_names if name in bpy.context.scene.objects]
     for o in keep:
         o.select_set(True)
     bpy.context.view_layer.objects.active = arm_obj

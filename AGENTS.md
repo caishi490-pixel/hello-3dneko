@@ -6,7 +6,7 @@
 
 - **Orchestrator & Geometry Pipeline（主协调与几何/验收模块）**：
   - 维护阶段流转（`Stage 0 -> 5`）与原子化 `manifest.json` 幂等状态锁；
-  - 通过无头 Blender CLI 子进程执行 `Quad` 去重、空间焊接防 UV 裂口与闭环自主重拓扑 (`retopo`) 及 6 维独立几何验证（注：重拓扑之后流程在本公开版中暂不开源）；
+  - 通过无头 Blender 子进程运行闭环重拓扑和独立几何验收。公开下游能力包括 UV/PBR 烘焙、高清反投、服装拟合与绑骨、发束重建及 GRE 精修。
   - 对输出图与指标执行独立质量关口核验。
 - **2D & Texture Worker（2D 三视图 / 修美 / 贴图优化 Worker）**：
   - **Stage 1**：按 `templates/codex_stage1_2d_prompt.md` 生成纯白 `#FFFFFF` 底 `40°` A-Pose 三视图（锁左右一致）及模块化拆件图；
@@ -14,7 +14,7 @@
 
 ## 工程安全、隐私与合规铁律
 
-1. **跨进程许可隔离红线**：`pipeline/`、`run_pipeline.py`、`workflows/` 及未来扩展主模块**严禁直接 `import bpy` 或 `bmesh`**，必须通过 `pipeline/blender_runner.py` 跨进程调用 `blender_scripts/`。
+1. **跨进程许可隔离**。`pipeline/`、`run_pipeline.py`、`workflows/` 与 GRE 数学/控制核心禁止导入 `bpy`、`bmesh`、`mathutils`、`pymeshlab` 或 `curiomesh`。`blender_scripts/` 和 `gre/blender_io.py`、`pipeline_worker.py`、`cli.py`、`p3_cli.py`、`p4_cli.py`、`qa_cli.py` 属于 Blender 子进程侧。`gpl_workers/` 由单独的 Python 进程执行。
 2. **禁止硬编码个人路径与凭证**：任何本机绝对路径（用户名、桌面密钥路径、个人盘符）或 API Token 严禁写入源码、模板与示例配置；统一通过环境变量（见 `.env.example`）传入。
 3. **付费 API 零自动重试与脱敏**：任何付费接口调用前必须检查 `CircuitBreaker`，先落盘 `generation_id` 再轮询，日志与错误提示须经过 `redact_secrets()` 脱敏。
 4. **严禁打包未授权模型资产**：测试集与公共仓库仅允许使用原创或明确 `CC0` 授权模型；`.blend`/`.glb`/项目产成品目录由 `.gitignore` 默认拦截，严禁误提交。

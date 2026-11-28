@@ -6,6 +6,8 @@ import json
 import math
 import sys
 from collections import deque
+from contextlib import contextmanager
+import time
 from pathlib import Path
 
 import bmesh
@@ -18,17 +20,15 @@ if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 
 from topology_toolkit import (  # noqa: E402
-    _backup_and_wire_metallic_emit,
-    _combine_orm_image,
     _dilate_diffuse_rgb_keep_alpha,
     _get_primary_meshes,
     _import_temp_reference,
     _load_scene,
-    _prepare_ref_color_baking_shader,
-    _restore_materials_from_emit,
-    _sanitize_tangent_normal_image,
     _set_active_object,
 )
+from blender_runtime import configure_cycles, junk_objects, remove_export_junk
+from normal_bake_diagnostics import diagnose_normal_bake, trace_normal_probes
+from pipeline.asset_ids import mesh_part_id
 
 
 def _parse_args():
@@ -274,7 +274,7 @@ def action_prepare_seams_and_unwrap(params, uv_layout_dir):
     cut_closed = bool(params.get("cut_closed_shells", True))
 
     out = []
-    for obj in _get_primary_meshes():
+    for index, obj in enumerate(sorted(_get_primary_meshes(), key=lambda ob: ob.name)):
         _set_active_object(obj)
         if not obj.data.uv_layers:
             obj.data.uv_layers.new(name="UVMap")
@@ -344,7 +344,7 @@ def action_prepare_seams_and_unwrap(params, uv_layout_dir):
         else:
             raise ValueError(f"Unknown UV unwrap mode: {mode}")
 
-        layout_path = Path(uv_layout_dir) / f"{obj.name}_uv_layout.png"
+        layout_path = Path(uv_layout_dir) / f"part_{index:03d}_uv_layout.png"
         saved_layout = _export_uv_layout_pil(obj, layout_path, res=1024)
         out.append(
             {
@@ -375,7 +375,7 @@ def _create_displaced_cage(obj, offset):
 
 def _reference_has_color_signal(ref_obj):
     """Detect whether high-poly reference carries non-uniform Base Color textures or vertex colors."""
-    for mat in ref_obj.data.materials:
+    for mat in dict.fromkeys(ref_obj.data.materials):
         if not mat or not mat.use_nodes:
             continue
         for node in mat.node_tree.nodes:
@@ -384,7 +384,10 @@ def _reference_has_color_signal(ref_obj):
         bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
         if bsdf and bsdf.inputs["Base Color"].is_linked:
             return True
-    return bool(ref_obj.data.color_attributes)
+    values = {tuple(node.inputs["Base Color"].default_value)
+              for mat in ref_obj.data.materials if mat and mat.use_nodes
+              for node in mat.node_tree.nodes if node.type == "BSDF_PRINCIPLED"}
+    return len(values) > 1 or bool(ref_obj.data.color_attributes)
 
 
 def _combine_full_orm_image(name, ao_img, rough_img, met_img, out_path):
@@ -410,7 +413,7 @@ def _combine_full_orm_image(name, ao_img, rough_img, met_img, out_path):
 def _backup_and_wire_ao_emit(ref_obj, ao_distance=0.08, ao_samples=16):
     """Wire a distance-clamped ShaderNodeAmbientOcclusion via Emission so enclosed cloth interiors do not bake solid black."""
     backups = []
-    for mat in ref_obj.data.materials:
+    for mat in dict.fromkeys(ref_obj.data.materials):
         if not mat or not mat.use_nodes:
             continue
         nodes = mat.node_tree.nodes
@@ -439,176 +442,222 @@ def _restore_materials_from_ao_emit(backups):
         mat.node_tree.nodes.remove(ao_n)
 
 
-def action_bake_pbr_maps(params, reference_glb, textures_out_dir):
-    """Cycles-bake Normal, AO, Base Color (if present), and Roughness/Metallic ORM cleanly."""
-    if not reference_glb or not Path(reference_glb).is_file():
-        raise FileNotFoundError(f"Missing high-poly reference for bake: {reference_glb}")
+def _pack_shared_atlas(meshes, tex_size, margin):
+    """Keep each part's island layout, fitting it inside a disjoint padded atlas cell."""
+    columns = math.ceil(math.sqrt(len(meshes)))
+    rows = math.ceil(len(meshes) / columns)
+    pitch = 1.0 / max(columns, rows)
+    padding = (margin + 1) / tex_size
+    if pitch <= 2 * padding:
+        raise ValueError("Atlas resolution is too small for the part count and bake margin")
+    for i, mesh in enumerate(meshes):
+        uv = mesh.data.uv_layers.active.uv
+        coordinates = np.empty(len(uv) * 2, dtype=np.float32)
+        uv.foreach_get("vector", coordinates)
+        points = coordinates.reshape((-1, 2))
+        minimum = points.min(axis=0)
+        span = np.ptp(points, axis=0)
+        if max(span) <= 1e-9:
+            raise ValueError(f"Degenerate UV bounds for {mesh.name}")
+        points[:] = (points - minimum - span / 2) * ((pitch - 2 * padding) / max(span))
+        points += ((i % columns + 0.5) * pitch, (i // columns + 0.5) * pitch)
+        uv.foreach_set("vector", coordinates)
 
-    tex_size = int(params.get("texture_size", 2048))
-    cage_extrusion = float(params.get("cage_extrusion", 0.003))
-    max_ray_distance = float(params.get("max_ray_distance", 0.018))
-    ao_distance = float(params.get("ao_distance", 0.08))
-    use_cage_mesh = bool(params.get("use_cage", False))
-    normal_strength = float(params.get("normal_strength", 0.55))
-    min_normal_b = float(params.get("min_normal_b", 0.68))
-    samples = int(params.get("bake_samples", 16))
-    margin_px = int(params.get("margin", 12))
 
-    out_dir = Path(textures_out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+def _temporary_atlas_mesh(meshes):
+    copies = []
+    for index, obj in enumerate(meshes):
+        clone = obj.copy()
+        clone.data = obj.data.copy()
+        clone.data.uv_layers.active.name = "__SharedBakeUV"
+        part = clone.data.attributes.new("__atlas_part", "INT", "FACE")
+        part.data.foreach_set("value", np.full(len(part.data), index, dtype=np.int32))
+        bpy.context.scene.collection.objects.link(clone)
+        copies.append(clone)
+    _set_active_object(copies[0])
+    for clone in copies:
+        clone.select_set(True)
+    bpy.ops.object.join()
+    joined = bpy.context.view_layer.objects.active
+    mapping = {}
+    indices = {}
+    for index, item in enumerate(joined.data.attributes["__atlas_part"].data):
+        indices.setdefault(item.value, []).append(index)
+    for index, name in enumerate(obj.name for obj in meshes):
+        faces = indices.get(index, [])
+        if not faces or faces[-1] - faces[0] + 1 != len(faces):
+            raise RuntimeError(f"Invalid shared-atlas face range for {name}")
+        mapping[mesh_part_id(name)] = [faces[0], faces[-1] + 1]
+    return joined, mapping
 
-    cand_meshes = _get_primary_meshes()
-    ref_obj, imported = _import_temp_reference(reference_glb)
-    sc = bpy.context.scene
-    prev_engine = sc.render.engine
-    created_cages = []
 
+@contextmanager
+def _bake_emission(ref_obj, channel):
+    backups = []
     try:
-        sc.render.engine = "CYCLES"
-        sc.cycles.device = "CPU"
-        try:
-            prefs = bpy.context.preferences.addons["cycles"].preferences
-            prefs.compute_device_type = "OPTIX"
-            prefs.refresh_devices()
-            if any(d.type != "CPU" for d in prefs.devices):
-                for d in prefs.devices:
-                    d.use = d.type != "CPU"
-                sc.cycles.device = "GPU"
-        except Exception:
-            sc.cycles.device = "CPU"
-        sc.cycles.samples = samples
-        sc.cycles.use_denoising = False
-
-        has_ref_color = _reference_has_color_signal(ref_obj)
-        baked_info = {"has_reference_color": has_ref_color, "meshes": {}}
-
-        def _bake_single_map(obj, cage_obj, mat, role, btype, pfilter, cspace, dst):
-            img = bpy.data.images.new(f"{obj.name}_baked_{role}", width=tex_size, height=tex_size, alpha=True)
-            img.colorspace_settings.name = cspace
-            tnode = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            tnode.image = img
-            mat.node_tree.nodes.active = tnode
-            tnode.select = True
-
-            bpy.ops.object.select_all(action="DESELECT")
-            ref_obj.select_set(True)
-            obj.select_set(True)
-            bpy.context.view_layer.objects.active = obj
-
-            sc.render.bake.use_pass_direct = False
-            sc.render.bake.use_pass_indirect = False
-            sc.render.bake.use_pass_color = True
-            bake_kwargs = {
-                "type": btype,
-                "use_selected_to_active": True,
-                "use_cage": cage_obj is not None,
-                "cage_extrusion": cage_extrusion,
-                "max_ray_distance": max_ray_distance,
-                "margin": margin_px,
-                "margin_type": "EXTEND",
-                "use_clear": True,
-                "normal_space": "TANGENT",
-            }
-            if cage_obj is not None:
-                bake_kwargs["cage_object"] = cage_obj.name
-            if pfilter:
-                bake_kwargs["pass_filter"] = pfilter
-            bpy.ops.object.bake(**bake_kwargs)
-            img.filepath_raw = str(dst)
-            img.file_format = "PNG"
-            img.save()
-            return tnode, img
-
-        for obj in cand_meshes:
-            _set_active_object(obj)
-            if not obj.data.uv_layers:
-                raise RuntimeError(f"Mesh '{obj.name}' has no active UV map before bake.")
-
-            cage_obj = None
-            if use_cage_mesh:
-                cage_obj = _create_displaced_cage(obj, max(0.001, cage_extrusion))
-                created_cages.append(cage_obj)
-                _set_active_object(obj)
-
-            obj.data.materials.clear()
-            mat = bpy.data.materials.new(f"{obj.name}_UVBakeMat")
-            mat.use_nodes = True
-            bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-            bsdf.inputs["Metallic"].default_value = 0.0
-            bsdf.inputs["Roughness"].default_value = 0.65
-            obj.data.materials.append(mat)
-
-            # 1. Metallic via Emission before touching reference shader
-            met_backups = _backup_and_wire_metallic_emit(ref_obj)
-            t_met, img_met = _bake_single_map(
-                obj, cage_obj, mat, "metallic", "EMIT", set(), "Non-Color", out_dir / f"{obj.name}_baked_metallic.png"
-            )
-            _restore_materials_from_emit(met_backups)
-
-            # 2. Roughness, AO, and Tangent Normal
-            t_rough, img_rough = _bake_single_map(
-                obj, cage_obj, mat, "roughness", "ROUGHNESS", set(), "Non-Color", out_dir / f"{obj.name}_baked_roughness.png"
-            )
-            ao_dst = out_dir / f"{obj.name}_baked_ao.png"
-            ao_backups = _backup_and_wire_ao_emit(ref_obj, ao_distance=ao_distance, ao_samples=samples)
-            t_ao, img_ao = _bake_single_map(obj, cage_obj, mat, "ao", "EMIT", set(), "Non-Color", ao_dst)
-            _restore_materials_from_ao_emit(ao_backups)
-            norm_dst = out_dir / f"{obj.name}_baked_normal.png"
-            t_norm, img_norm = _bake_single_map(
-                obj, cage_obj, mat, "normal", "NORMAL", set(), "Non-Color", norm_dst
-            )
-            _sanitize_tangent_normal_image(img_norm, min_b=min_normal_b)
-
-            # 3. Base Color (with metallic=0 bypass so gold/metal surfaces preserve crisp albedo)
-            diff_dst = out_dir / f"{obj.name}_baked_diffuse.png"
-            _prepare_ref_color_baking_shader(ref_obj)
-            t_diff, img_diff = _bake_single_map(
-                obj, cage_obj, mat, "diffuse", "DIFFUSE", {"COLOR"}, "sRGB", diff_dst
-            )
-            _dilate_diffuse_rgb_keep_alpha(img_diff, passes=6)
-
-            # Pack AO(R) + Roughness(G) + Metallic(B) into glTF-compliant ORM texture
-            orm_dst = out_dir / f"{obj.name}_baked_orm.png"
-            orm_img = _combine_full_orm_image(f"{obj.name}_baked_orm", img_ao, img_rough, img_met, orm_dst)
-
-            mat.node_tree.nodes.remove(t_met)
-            mat.node_tree.nodes.remove(t_rough)
-            mat.node_tree.nodes.remove(t_ao)
-
-            t_orm = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            t_orm.image = orm_img
-            sep = mat.node_tree.nodes.new("ShaderNodeSeparateColor")
-
-            links = mat.node_tree.links
-            links.new(t_diff.outputs["Color"], bsdf.inputs["Base Color"])
-            links.new(t_orm.outputs["Color"], sep.inputs["Color"])
-            links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
-            links.new(sep.outputs["Blue"], bsdf.inputs["Metallic"])
-
-            nmap = mat.node_tree.nodes.new("ShaderNodeNormalMap")
-            nmap.inputs["Strength"].default_value = normal_strength
-            links.new(t_norm.outputs["Color"], nmap.inputs["Color"])
-            links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-
-            baked_info["meshes"][obj.name] = {
-                "diffuse": str(diff_dst),
-                "normal": str(norm_dst),
-                "ao": str(ao_dst),
-                "orm": str(orm_dst),
-            }
-
-        return {"baked_pbr": baked_info}
+        for mat in dict.fromkeys(ref_obj.data.materials):
+            if not mat or not mat.use_nodes:
+                continue
+            nodes, links = mat.node_tree.nodes, mat.node_tree.links
+            out = next((n for n in nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output), None)
+            bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+            if not out or not bsdf:
+                continue
+            previous = out.inputs["Surface"].links[0].from_socket if out.inputs["Surface"].is_linked else None
+            emit = nodes.new("ShaderNodeEmission")
+            socket = bsdf.inputs[channel]
+            if socket.is_linked:
+                links.new(socket.links[0].from_socket, emit.inputs["Color"])
+            elif channel == "Metallic":
+                emit.inputs["Color"].default_value = (socket.default_value,) * 3 + (1.0,)
+            else:
+                emit.inputs["Color"].default_value = socket.default_value
+            links.new(emit.outputs["Emission"], out.inputs["Surface"])
+            backups.append((nodes, links, out, previous, emit))
+        yield
     finally:
-        sc.render.engine = prev_engine
-        for c in created_cages:
-            if c.name in bpy.data.objects:
-                mesh_ref = c.data
-                bpy.data.objects.remove(c, do_unlink=True)
-                if mesh_ref and mesh_ref.users == 0:
-                    bpy.data.meshes.remove(mesh_ref)
-        for o in imported:
-            if o.name in bpy.data.objects:
-                bpy.data.objects.remove(o, do_unlink=True)
+        for nodes, links, out, previous, emit in backups:
+            nodes.remove(emit)
+            if previous is not None:
+                links.new(previous, out.inputs["Surface"])
+
+
+def action_bake_pbr_maps(params, reference_glb, textures_out_dir):
+    """Bake each channel once into a shared UV atlas and attach it to the original parts."""
+    if not reference_glb or not Path(reference_glb).is_file():
+        raise FileNotFoundError("Missing high-poly reference for bake")
+    started = time.monotonic()
+    size = int(params.get("texture_size", 2048))
+    extrusion = float(params.get("cage_extrusion", 0.003))
+    ray_distance = float(params.get("max_ray_distance", 0.0))
+    samples = int(params.get("bake_samples", 16))
+    margin = int(params.get("margin", 12))
+    output = Path(textures_out_dir)
+    output.mkdir(parents=True, exist_ok=True)
+
+    meshes = sorted(_get_primary_meshes(), key=lambda obj: obj.name)
+    if not meshes or any(not obj.data.uv_layers.active or not obj.data.polygons for obj in meshes):
+        raise ValueError("Every part needs a nonempty mesh and active UV map before baking")
+    for obj in meshes:
+        if obj.data.users > 1:
+            obj.data = obj.data.copy()
+    target = meshes[0]
+    face_ranges = {mesh_part_id(target.name): [0, len(target.data.polygons)]}
+    if len(meshes) > 1:
+        _pack_shared_atlas(meshes, size, margin)
+        target, face_ranges = _temporary_atlas_mesh(meshes)
+    reference, imported = _import_temp_reference(reference_glb)
+    scene = bpy.context.scene
+    previous_engine = scene.render.engine
+    cage = None
+    paths = {}
+    try:
+        device = configure_cycles(scene)
+        scene.cycles.samples = samples
+        scene.cycles.use_denoising = False
+        has_color = _reference_has_color_signal(reference)
+        if params.get("use_cage"):
+            cage = _create_displaced_cage(target, max(1e-6, extrusion))
+
+        material = bpy.data.materials.new("SharedBakedPBR")
+        material.use_nodes = True
+        nodes, links = material.node_tree.nodes, material.node_tree.links
+        bsdf = next(node for node in nodes if node.type == "BSDF_PRINCIPLED")
+        target.data.materials.clear()
+        target.data.materials.append(material)
+        for face in target.data.polygons:
+            face.material_index = 0
+
+        def bake(role, bake_type, colorspace="Non-Color"):
+            image = bpy.data.images.new(f"atlas_baked_{role}", width=size, height=size, alpha=True)
+            image.colorspace_settings.name = colorspace
+            node = nodes.new("ShaderNodeTexImage")
+            node.image = image
+            nodes.active = node
+            _set_active_object(target)
+            reference.select_set(True)
+            result = bpy.ops.object.bake(
+                type=bake_type, use_selected_to_active=True, use_clear=True,
+                cage_extrusion=extrusion, max_ray_distance=ray_distance, margin=margin,
+                margin_type="EXTEND", use_cage=cage is not None, cage_object=cage.name if cage else "",
+                normal_space="TANGENT",
+            )
+            if "FINISHED" not in result:
+                raise RuntimeError(f"Cycles {role} bake did not finish")
+            path = output / f"atlas_baked_{role}.png"
+            paths[role] = str(path)
+            image.filepath_raw = str(path)
+            image.file_format = "PNG"
+            return node, image
+
+        with _bake_emission(reference, "Base Color"):
+            diffuse, diffuse_image = bake("diffuse", "EMIT", "sRGB")
+        _dilate_diffuse_rgb_keep_alpha(diffuse_image, passes=min(6, margin))
+        diffuse_image.save()
+
+        normal, normal_image = bake("normal", "NORMAL")
+        probes, check_mode = trace_normal_probes(target, reference, cage_extrusion=extrusion,
+                                                 max_ray_distance=ray_distance, cage=cage)
+        diagnostics = diagnose_normal_bake(
+            normal_image, probes, check_mode=check_mode, confirmed=params.get("confirmed_tangent_sign", False),
+            expected_tangent_normal=params.get("expected_tangent_normal"),
+        )
+        normal_image.save()
+
+        rough, rough_image = bake("roughness", "ROUGHNESS")
+        with _bake_emission(reference, "Metallic"):
+            metal, metal_image = bake("metallic", "EMIT")
+        ao_backups = _backup_and_wire_ao_emit(reference, ao_distance=float(params.get("ao_distance", 0.08)),
+                                             ao_samples=samples)
+        try:
+            ao, ao_image = bake("ao", "EMIT")
+        finally:
+            _restore_materials_from_ao_emit(ao_backups)
+        ao_image.save()
+        paths["orm"] = str(output / "atlas_baked_orm.png")
+        orm_image = _combine_full_orm_image("atlas_baked_orm", ao_image, rough_image, metal_image, paths["orm"])
+        for node in (rough, metal, ao):
+            nodes.remove(node)
+        for image in (rough_image, metal_image, ao_image):
+            bpy.data.images.remove(image)
+        del paths["roughness"], paths["metallic"]
+
+        orm = nodes.new("ShaderNodeTexImage")
+        orm.image = orm_image
+        separate = nodes.new("ShaderNodeSeparateColor")
+        nmap = nodes.new("ShaderNodeNormalMap")
+        nmap.inputs["Strength"].default_value = float(params.get("normal_strength", 0.55))
+        links.new(diffuse.outputs["Color"], bsdf.inputs["Base Color"])
+        links.new(orm.outputs["Color"], separate.inputs["Color"])
+        links.new(separate.outputs["Green"], bsdf.inputs["Roughness"])
+        links.new(separate.outputs["Blue"], bsdf.inputs["Metallic"])
+        gltf_settings = bpy.data.node_groups.get("glTF Material Output")
+        if gltf_settings is None or not any(item.name == "Occlusion" for item in gltf_settings.interface.items_tree):
+            gltf_settings = bpy.data.node_groups.new("glTF Material Output", "ShaderNodeTree")
+            gltf_settings.interface.new_socket(name="Occlusion", in_out="INPUT", socket_type="NodeSocketFloat")
+        export_settings = nodes.new("ShaderNodeGroup")
+        export_settings.node_tree = gltf_settings
+        links.new(separate.outputs["Red"], export_settings.inputs["Occlusion"])
+        links.new(normal.outputs["Color"], nmap.inputs["Color"])
+        links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
+        for obj in meshes:
+            obj.data.materials.clear()
+            obj.data.materials.append(material)
+            for face in obj.data.polygons:
+                face.material_index = 0
+        (output / "normal_diagnostics.json").write_text(json.dumps(diagnostics), encoding="utf-8")
+        return {"baked_pbr": {"has_reference_color": has_color, "meshes": {obj.name: paths for obj in meshes},
+                              "face_ranges": face_ranges, "cycles_device": device, "bake_calls": 5,
+                              "normal_diagnostics": diagnostics, "elapsed_seconds": time.monotonic() - started}}
+    finally:
+        scene.render.engine = previous_engine
+        temporary = [*imported]
+        if cage is not None:
+            temporary.append(cage)
+        if len(meshes) > 1:
+            temporary.append(target)
+        for obj in temporary:
+            bpy.data.objects.remove(obj, do_unlink=True)
 
 
 ACTION_DISPATCH = {
@@ -636,6 +685,7 @@ def main():
         res = ACTION_DISPATCH[name](params, ctx)
         step_logs.append({"action": name, "params": params, "result": res})
 
+    remove_export_junk()
     bpy.ops.file.pack_all()
     out_blend = Path(plan["output_blend"])
     out_glb = Path(plan["output_glb"])
@@ -646,6 +696,7 @@ def main():
         export_format="GLB",
         export_animations=True,
         export_skins=True,
+        export_tangents=True,
     )
 
     report = {
@@ -653,6 +704,7 @@ def main():
         "output_blend": str(out_blend),
         "output_glb": str(out_glb),
         "steps": step_logs,
+        "junk_objects": [o.name for o in junk_objects(bpy.context.scene.objects)],
     }
     Path(plan["execution_log"]).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("UV & Bake toolkit finished executing plan ->", out_glb)

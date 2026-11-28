@@ -11,6 +11,12 @@ import bpy
 import numpy as np
 from mathutils import Vector
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from blender_runtime import configure_cycles as pick_cycles_device
+
 
 def parse_args():
     argv = sys.argv[sys.argv.index("--") + 1 :] if "--" in sys.argv else []
@@ -19,25 +25,9 @@ def parse_args():
     return parser.parse_args(argv)
 
 
-def configure_cycles(scene, device_type="OPTIX", samples=48, res=896):
-    scene.render.engine = "CYCLES"
-    prefs = bpy.context.preferences.addons["cycles"].preferences
-    used_device = "CPU"
-    try:
-        prefs.compute_device_type = device_type
-        prefs.refresh_devices()
-        gpu_ok = False
-        for dev in prefs.devices:
-            dev.use = dev.type != "CPU"
-            if dev.use:
-                gpu_ok = True
-        if gpu_ok:
-            scene.cycles.device = "GPU"
-            used_device = f"GPU:{device_type}"
-        else:
-            scene.cycles.device = "CPU"
-    except Exception:
-        scene.cycles.device = "CPU"
+def configure_cycles(scene, device_type="AUTO", samples=48, res=896):
+    backend = pick_cycles_device(scene, preferred=device_type)
+    used_device = f"GPU:{backend}" if backend != "CPU" else "CPU"
     scene.cycles.samples = samples
     scene.cycles.use_denoising = True
     scene.render.resolution_x = res
@@ -302,7 +292,7 @@ def main():
     cam = setup_studio(scene, target_height)
     report["cycles_device"] = configure_cycles(
         scene,
-        device_type=cfg.get("cycles_device_type", "OPTIX"),
+        device_type=cfg.get("cycles_device_type", "AUTO"),
         samples=int(cfg.get("render_samples", 48)),
         res=int(cfg.get("render_resolution", 896)),
     )

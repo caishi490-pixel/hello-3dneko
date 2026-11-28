@@ -422,6 +422,25 @@ def evaluate_uv_and_bake(uv_rep, bake_rep, fidelity, criteria):
             )
 
     bake_ok = True
+    diagnostics = bake_rep.get("normal_diagnostics")
+    if diagnostics:
+        if diagnostics["ray_valid_hit_pct"] < criteria["min_bake_coverage"] * 100:
+            bake_ok = False
+            blocking.append(f"BakeRayCoverage: valid hits={diagnostics['ray_valid_hit_pct']:.3f}%")
+        mode = diagnostics.get("cross_layer_check_mode", "explicit_bake_layer")
+        limit = criteria.get("max_heuristic_cross_layer_pct", 3.5) if mode == "normal_dot_heuristic" else 0.0
+        if diagnostics["cross_layer_mis_hit_pct"] > limit:
+            bake_ok = False
+            blocking.append(
+                f"BakeCrossLayer: {mode} wrong layer hits={diagnostics['cross_layer_mis_hit_pct']:.3f}% > {limit:.3f}%"
+            )
+        slope_error = diagnostics["slope_decode_angle_error_deg"]
+        if slope_error is not None and slope_error > criteria.get("max_slope_decode_error_deg", 2.0):
+            bake_ok = False
+            blocking.append(f"BakeSlopeDecode: error={slope_error:.3f} degrees")
+    elif criteria.get("require_normal_diagnostics"):
+        bake_ok = False
+        blocking.append("BakeNormalDiagnostics: missing probe report")
     diff = bake_rep.get("diffuse", {})
     norm = bake_rep.get("normal", {})
     ao = bake_rep.get("ao", {})
@@ -479,18 +498,36 @@ def main():
     criteria = json.loads(Path(args.criteria_json).read_text(encoding="utf-8-sig"))
 
     load_scene_file(args.candidate_glb)
-    meshes = [o for o in bpy.context.scene.objects if o.type == "MESH"]
-    if not meshes:
-        raise RuntimeError(f"No mesh objects inside candidate GLB: {args.candidate_glb}")
-    primary = meshes[0]
+    from blender_runtime import junk_objects
 
-    uv_rep = inspect_uv_geometry(primary)
+    junk = [obj.name for obj in junk_objects(bpy.context.scene.objects)]
+    meshes = [o for o in bpy.context.scene.objects if o.type == "MESH" and o.name not in junk]
+    if not meshes:
+        raise RuntimeError("No usable mesh objects inside candidate GLB")
+    has_uv = all(mesh.data.uv_layers.active for mesh in meshes)
+    if len(meshes) > 1 and has_uv:
+        bpy.ops.object.select_all(action="DESELECT")
+        for mesh in meshes:
+            mesh.select_set(True)
+            mesh.data.uv_layers.active.name = "__ValidationUV"
+        bpy.context.view_layer.objects.active = meshes[0]
+        bpy.ops.object.join()
+    primary = bpy.context.view_layer.objects.active if len(meshes) > 1 and has_uv else meshes[0]
+
+    uv_rep = inspect_uv_geometry(primary) if has_uv else {"has_uv": False}
     bake_rep = inspect_baked_maps(primary, args.textures_dir)
+    diagnostics = Path(args.textures_dir) / "normal_diagnostics.json" if args.textures_dir else None
+    if diagnostics and diagnostics.is_file():
+        bake_rep["normal_diagnostics"] = json.loads(diagnostics.read_text(encoding="utf-8"))
     scene_rep = inspect_current_scene(reference_path=args.high_reference)
     fidelity = scene_rep.get("fidelity") or {"valid": False}
     renders = _render_qc_views(args.renders_dir, prefix=Path(args.candidate_glb).stem)
 
     verdict = evaluate_uv_and_bake(uv_rep, bake_rep, fidelity, criteria)
+    verdict["junk_objects"] = junk
+    if junk:
+        verdict["passed"] = False
+        verdict["blocking_failures"].append(f"Engine hygiene: {junk}")
     verdict["renders"] = renders
     verdict["candidate_glb"] = str(args.candidate_glb)
     verdict["high_reference"] = str(args.high_reference)

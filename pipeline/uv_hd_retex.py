@@ -256,7 +256,16 @@ def execute(args):
             if not 0.3 <= args.detail_scale <= 1.0 or not all(math.isfinite(n) for n in args.detail_offset):
                 raise ValueError("Invalid detail camera scale or offset")
             common = {"input": str(args.input.resolve(strict=True)), "front": front}
-            invoke(root, "uv", **common, size=args.size, bleed=args.bleed, corset=args.corset_regions)
+            profile_file = args.region_profile or REPO_ROOT / "templates" / "uv_regions" / (
+                "corset.json" if args.corset_regions else "generic.json"
+            )
+            profile = read_json(profile_file)
+            if not isinstance(profile.get("rules"), list) or not isinstance(profile.get("weights"), dict):
+                raise ValueError("Region profile requires rules and weights")
+            if any(not isinstance(weight, (int, float)) or not math.isfinite(weight) or weight <= 0
+                   for weight in profile["weights"].values()):
+                raise ValueError("Region weights must be positive finite numbers")
+            invoke(root, "uv", **common, size=args.size, bleed=args.bleed, region_profile=profile)
             invoke(root, "photo", **common, resolution=args.resolution,
                    detail_offset=args.detail_offset, detail_scale=args.detail_scale, obliques=args.obliques,
                    lining=args.lining)
@@ -306,7 +315,9 @@ def add_parser(subparsers):
     prepare.add_argument("--front", nargs=3, type=float, default=(0, -1, 0))
     prepare.add_argument("--detail-offset", nargs=2, type=float, default=(0.04, 0.13))
     prepare.add_argument("--detail-scale", type=float, default=0.66)
-    prepare.add_argument("--corset-regions", action="store_true")
+    regions = prepare.add_mutually_exclusive_group()
+    regions.add_argument("--region-profile", type=Path, help="JSON UV region rules and weights")
+    regions.add_argument("--corset-regions", action="store_true", help="Use the bundled corset region profile")
     prepare.add_argument("--obliques", action="store_true", help="Add four elevated/lowered oblique views")
     prepare.add_argument("--lining", action="store_true", help="Add four steeper lining and hem views")
     align = steps.add_parser("align", help="Check silhouettes, ornaments and projection confidence")

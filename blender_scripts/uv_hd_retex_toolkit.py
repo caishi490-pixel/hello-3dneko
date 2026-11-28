@@ -237,7 +237,11 @@ def main():
     elif action == "uv":
         from uv_hd_retex_uv import prepare_uv
 
-        report = prepare_uv(obj, root, config["front"], config["size"], config["bleed"], config["corset"])
+        template = "corset.json" if config.get("corset") else "generic.json"
+        profile = config.get("region_profile") or json.loads(
+            (Path(__file__).resolve().parent.parent / "templates" / "uv_regions" / template).read_text(encoding="utf-8")
+        )
+        report = prepare_uv(obj, root, config["front"], config["size"], config["bleed"], profile)
         write_json(root / "uv_audit.json", report)
         bpy.context.preferences.filepaths.save_version = 0
         bpy.ops.wm.save_as_mainfile(filepath=str(root / "work" / "uv.blend"))

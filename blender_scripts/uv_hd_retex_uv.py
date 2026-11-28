@@ -118,39 +118,44 @@ def uv_coords(layer):
     return result.reshape(-1, 2)
 
 
-def semantic_regions(obj, front, corset):
+def semantic_regions(obj, front, profile):
     coords, vertex_ids, loops, mat_ids = mesh_arrays(obj)
     triangles = coords[vertex_ids]
     centers = triangles.mean(axis=1)
     normal = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
     normal /= np.maximum(np.linalg.norm(normal, axis=1, keepdims=True), 1e-12)
     outward = np.asarray(front) / np.linalg.norm(front)
-    labels = np.full(len(triangles), "other", dtype="<U24")
-    labels[normal @ outward > 0.45] = "front_panel"
-    if corset:
+    across = np.cross(outward, [0, 0, 1])
+
+    def normalized(values, reference):
+        return (values - reference.min()) / max(1e-12, float(np.ptp(reference)))
+
+    features = {
+        "facing": normal @ outward,
+        "height": normalized(centers[:, 2], coords[:, 2]),
+        "width": normalized(centers @ across, coords @ across),
+        "depth": normalized(centers @ outward, coords @ outward),
+    }
+    if any("red_minus_blue" in rule["when"] for rule in profile["rules"]):
         uv = uv_coords(obj.data.uv_layers.active)[loops].mean(axis=1)
-        colors = np.empty((len(uv), 3), dtype=np.float32)
+        colors = np.zeros((len(uv), 3), dtype=np.float32)
         for material, maps in enumerate(material_maps(obj)):
             mask = mat_ids == material
             colors[mask] = sample_material(maps, uv[mask])[:, :3]
-        gold = colors[:, 0] - colors[:, 2] > 0.045
-        height = (centers[:, 2] - coords[:, 2].min()) / np.ptp(coords[:, 2])
-        across = np.cross(outward, [0, 0, 1])
-        widths = coords @ across
-        position = ((centers @ across) - widths.min()) / np.ptp(widths)
-        front_facing = normal @ outward > 0.28
-        forward = coords @ outward
-        outer_front = centers @ outward > (forward.min() + forward.max()) / 2
-        labels[(height > 0.60) & (height < 0.93) & (abs(position - 0.51) < 0.13)
-               & front_facing & outer_front] = "lacing"
-        labels[(height > 0.24) & (height < 0.76) & (position < 0.47)] = "bow_and_ribbon"
-        labels[height <= 0.24] = "tassel"
-        labels[gold & (height >= 0.59)] = "gold_filigree"
-        labels[gold & (height < 0.59)] = "bell_and_beads"
+        features["red_minus_blue"] = colors[:, 0] - colors[:, 2]
+    labels = np.full(len(triangles), "other", dtype=object)
+    for rule in profile["rules"]:
+        mask = np.ones(len(triangles), dtype=bool)
+        for feature, limits in rule["when"].items():
+            values = features[feature]
+            for comparison, bound in limits.items():
+                mask &= {"gt": np.greater, "gte": np.greater_equal,
+                         "lt": np.less, "lte": np.less_equal}[comparison](values, bound)
+        labels[mask] = rule["label"]
     return labels, tri_area(triangles), loops
 
 
-def island_weights(obj, labels, loops, areas):
+def island_weights(obj, labels, loops, areas, weights):
     mesh = obj.data
     coords = uv_coords(mesh.uv_layers.active)
     parents = np.arange(len(coords))
@@ -176,8 +181,6 @@ def island_weights(obj, labels, loops, areas):
     islands = defaultdict(list)
     for i in range(len(coords)):
         islands[root(i)].append(i)
-    weights = {"front_panel": 1.18, "lacing": 1.3, "gold_filigree": 1.25,
-               "bow_and_ribbon": 1.27, "bell_and_beads": 1.32, "tassel": 1.3}
     surface = defaultdict(float)
     importance = defaultdict(float)
     for corners, label, area in zip(loops, labels, areas):
@@ -226,12 +229,12 @@ def separate_overlap_faces(obj, conflicts):
     return len(detached)
 
 
-def prepare_uv(obj, root, front, size, margin, corset):
+def prepare_uv(obj, root, front, size, margin, profile):
     mesh = obj.data
     if HD_UV in mesh.uv_layers:
         raise ValueError(f"Input already contains {HD_UV}")
     source = mesh.uv_layers.active.name
-    labels, areas, loops = semantic_regions(obj, front, corset)
+    labels, areas, loops = semantic_regions(obj, front, profile)
     mesh.uv_layers.active = mesh.uv_layers.new(name=HD_UV)
     bm = bmesh.new()
     bm.from_mesh(mesh)
@@ -258,7 +261,7 @@ def prepare_uv(obj, root, front, size, margin, corset):
             bpy.ops.uv.smart_project(angle_limit=math.radians(int(mode[-2:])), correct_aspect=False)
         bpy.ops.uv.average_islands_scale()
         bpy.ops.object.mode_set(mode="OBJECT")
-        island_weights(obj, labels, loops, areas)
+        island_weights(obj, labels, loops, areas, profile["weights"])
         pack_uv(margin, size)
         conflicts = set()
         metrics = inspect_uv_geometry(obj, overlap_faces=conflicts)

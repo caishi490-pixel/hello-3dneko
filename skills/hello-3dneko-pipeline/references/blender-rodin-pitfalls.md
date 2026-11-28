@@ -1,6 +1,6 @@
 # Blender & AI 3D CLI Technical Pitfalls Checklist
 
-Verified fixes from building, cleaning, rigging, and rendering stylized anime character assets using headless Blender (`blender -b`, OPTIX/CPU Cycles rendering), ComfyUI/OpenAI image edits, and Hyper3D Rodin (`@hyper3d/cli`).
+Use headless Blender with Cycles device detection in the order OptiX, CUDA, HIP, oneAPI, CPU. Set `HELLO_3DNEKO_BLENDER_EXE` to the executable path when auto-discovery fails. Stage bake and export I/O on short ASCII paths. Remove isolated bone shapes before export and check `junk_objects == []` after reload. Run `pack-glb` to repair zero tangents in an existing GLB.
 
 ## 1. Blender Mesh Cleanup & `.glb` UV Seam Trap
 

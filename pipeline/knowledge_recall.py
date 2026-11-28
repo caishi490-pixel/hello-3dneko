@@ -33,6 +33,27 @@ def _row_matches_task(row: dict[str, Any], task_type: str) -> bool:
     return task_type == "retopo"
 
 
+_EXCLUSIVE_TAGS = (
+    frozenset({"single_prop", "multi_part"}),
+    frozenset({"single_shell_envelope", "require_gap_preservation"}),
+)
+
+
+def _record_tags(row):
+    raw = row.get("asset_tags") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    tags = {tag.casefold() for tag in raw if isinstance(tag, str)}
+    if row.get("garment_type"):
+        tags.add(str(row["garment_type"]).casefold())
+    return tags
+
+
+def _compatible_tags(left, right):
+    return not any(left & group and right & group and (left & group) != (right & group)
+                   for group in _EXCLUSIVE_TAGS)
+
+
 def load_strategy_priors(
     knowledge_dir: Path | None,
     task_type: str,
@@ -59,13 +80,17 @@ def load_strategy_priors(
         }
 
     kdir = Path(knowledge_dir)
-    recipes = [r for r in _iter_jsonl(kdir / "learned_recipes.jsonl") if _row_matches_task(r, task_type)]
-    failures = [r for r in _iter_jsonl(kdir / "failure_lessons.jsonl") if _row_matches_task(r, task_type)]
+    tags = {tag.casefold() for tag in asset_tags or set()}
+
+    def compatible(row):
+        return _row_matches_task(row, task_type) and _compatible_tags(tags, _record_tags(row))
+
+    recipes = [row for row in _iter_jsonl(kdir / "learned_recipes.jsonl") if compatible(row)]
+    failures = [row for row in _iter_jsonl(kdir / "failure_lessons.jsonl") if compatible(row)]
 
     stats: dict[str, dict[str, float]] = defaultdict(
         lambda: {"wins": 0.0, "fails": 0.0, "score_sum": 0.0, "tag_bonus": 0.0}
     )
-    tags = asset_tags or set()
 
     for r in recipes:
         sid = str(r.get("strategy_id") or "").strip()
@@ -75,10 +100,8 @@ def load_strategy_priors(
         st = stats[sid]
         st["wins"] += 1.0
         st["score_sum"] += sc
-        if tags:
-            row_blob = json.dumps(r, ensure_ascii=False).lower()
-            if any(t.lower() in row_blob for t in tags):
-                st["tag_bonus"] += 8.0
+        if tags & _record_tags(r):
+            st["tag_bonus"] += 8.0
 
     for f in failures:
         sid = str(f.get("banned_strategy") or f.get("strategy_id") or "").strip()

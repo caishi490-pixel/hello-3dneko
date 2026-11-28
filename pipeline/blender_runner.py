@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .config import require_blender
+
 
 def run_blender_script(
     blender_exe: str,
@@ -38,7 +40,8 @@ def run_blender_script(
     if dry_run:
         return {"status": "dry_run", "command": cmd, "job_config_path": str(job_config_path)}
 
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
+    cmd[0] = require_blender(blender_exe)
+    proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, check=False)
     combined = proc.stdout + ("\n---STDERR---\n" + proc.stderr if proc.stderr else "")
     log_path.write_text(combined, encoding="utf-8")
     if proc.returncode != 0:

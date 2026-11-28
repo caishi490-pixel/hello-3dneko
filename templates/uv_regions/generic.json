@@ -1,0 +1,4 @@
+{
+  "rules": [{"label": "front_panel", "when": {"facing": {"gt": 0.45}}}],
+  "weights": {"front_panel": 1.18}
+}

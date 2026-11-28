@@ -29,6 +29,12 @@ from mathutils import Vector
 from mathutils.bvhtree import BVHTree
 
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from blender_runtime import configure_cycles, remove_export_junk
+
 GRID_COLS = "ABCDEFGHIJ"
 
 
@@ -156,18 +162,7 @@ def _compute_camera_spec(target_obj, view_name: str, zoom: float = 1.0, focus_fa
 
 def _setup_cycles(res: int):
     scene = bpy.context.scene
-    scene.render.engine = "CYCLES"
-    scene.cycles.device = "CPU"
-    try:
-        prefs = bpy.context.preferences.addons["cycles"].preferences
-        prefs.compute_device_type = "OPTIX"
-        prefs.refresh_devices()
-        if any(d.type != "CPU" for d in prefs.devices):
-            for d in prefs.devices:
-                d.use = d.type != "CPU"
-            scene.cycles.device = "GPU"
-    except Exception:
-        scene.cycles.device = "CPU"
+    configure_cycles(scene)
     scene.cycles.samples = 20
     scene.cycles.use_denoising = True
     scene.render.resolution_x = res
@@ -927,6 +922,7 @@ def main():
         out_g = Path(args.out_glb) if args.out_glb else (sdir / "surgeon_output.glb")
         out_b.parent.mkdir(parents=True, exist_ok=True)
         out_g.parent.mkdir(parents=True, exist_ok=True)
+        remove_export_junk()
         bpy.ops.file.pack_all()
         bpy.ops.wm.save_as_mainfile(filepath=str(out_b))
         bpy.ops.export_scene.gltf(filepath=str(out_g), export_format="GLB", export_animations=True, export_skins=True)

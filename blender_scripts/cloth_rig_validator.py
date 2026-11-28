@@ -21,6 +21,7 @@ from cloth_rig_inspector import (  # noqa: E402
     strip_bone_shape_junk,
 )
 from topology_inspector import load_scene_file  # noqa: E402
+from blender_runtime import configure_cycles, junk_objects
 
 
 def _parse_args():
@@ -434,17 +435,7 @@ def _render_pose_suite(arm_obj, body_objs, garment_obj, skel_map, renders_dir: P
     sc.collection.objects.link(cam)
     sc.camera = cam
 
-    sc.render.engine = "CYCLES"
-    sc.cycles.device = "CPU"
-    try:
-        prefs = bpy.context.preferences.addons["cycles"].preferences
-        prefs.compute_device_type = "OPTIX"
-        prefs.refresh_devices()
-        for d in prefs.devices:
-            d.use = d.type != "CPU"
-        sc.cycles.device = "GPU"
-    except Exception:
-        sc.cycles.device = "CPU"
+    configure_cycles(sc)
     sc.cycles.samples = 24
     sc.cycles.use_denoising = True
     sc.render.resolution_x = 640
@@ -557,6 +548,7 @@ def main():
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
     load_scene_file(Path(args.candidate_blend))
+    junk = sorted(obj.name for obj in junk_objects(bpy.context.scene.objects))
     arm_obj = next((o for o in bpy.data.objects if o.type == "ARMATURE"), None)
     meshes = strip_bone_shape_junk([o for o in bpy.data.objects if o.type == "MESH"])
     garment_obj = next((o for o in meshes if "garment" in o.name.lower() or o.name == "Fitted_Garment"), None)
@@ -607,6 +599,11 @@ def main():
         "renders": renders,
     }
     eval_res = evaluate_cloth_rig(full_metrics, criteria)
+    eval_res["junk_objects"] = junk
+    if junk:
+        eval_res["passed"] = False
+        eval_res["blocking_failures"].append(f"Engine hygiene: {junk}")
+        eval_res["failure_classes"].append("engine_junk")
     payload = {
         "metrics": full_metrics,
         "evaluation": eval_res,

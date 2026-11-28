@@ -15,6 +15,8 @@ from pipeline.config import (
     init_project,
     load_project,
 )
+from pipeline.asset_triage import triage_asset
+from pipeline.glb_postprocess import repair_zero_tangents
 from pipeline.image_tools import audit_uv_atlas
 from pipeline.experiment_ledger import compute_ledger_summary, load_experiments, rebuild_scorecard_markdown
 from pipeline.stages import STAGE_ORDER, run_stage_range
@@ -81,6 +83,18 @@ def cmd_inspect_uv(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_triage(args: argparse.Namespace) -> int:
+    profile = triage_asset(args.input, args.out)
+    print(json.dumps(profile, ensure_ascii=False, indent=2))
+    return 0
+
+
+def cmd_pack_glb(args: argparse.Namespace) -> int:
+    result = repair_zero_tangents(args.input, args.out)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
 def cmd_retopo(args: argparse.Namespace) -> int:
     criteria = RetopoCriteria(
         min_faces=args.min_faces,
@@ -94,6 +108,9 @@ def cmd_retopo(args: argparse.Namespace) -> int:
         criteria=criteria,
         max_iterations=args.max_iters,
         dry_run=args.dry_run,
+        shell_contract=json.loads(Path(args.shell_contract).read_text(encoding="utf-8-sig")) if args.shell_contract else None,
+        pymeshlab_operation=args.pymeshlab_operation,
+        knowledge_dir=args.knowledge_dir,
     )
     print(json.dumps(res, ensure_ascii=False, indent=2))
     return 0 if res.get("status") in ("delivered", "dry_run") else 1
@@ -105,6 +122,7 @@ def cmd_uv_bake(args: argparse.Namespace) -> int:
         max_p95_stretch=args.max_p95_stretch,
         min_packing_coverage_pct=args.min_pack_pct,
         min_bake_coverage=args.min_bake_cov,
+        max_heuristic_cross_layer_pct=args.max_heuristic_cross_layer_pct,
     )
     res = run_closed_loop_uv_bake(
         high_poly=Path(args.high),
@@ -421,6 +439,20 @@ def build_parser() -> argparse.ArgumentParser:
     p_ret.add_argument("--input", required=True, help="Raw .glb or .blend asset to retopologize")
     p_ret.add_argument("--out", required=True, help="Output closed-loop working directory")
     p_ret.add_argument("--max-iters", type=int, default=5)
+    p_triage = sub.add_parser("triage", help="Inspect mesh parts and detect available backends")
+    p_triage.add_argument("--input", required=True)
+    p_triage.add_argument("--out", required=True)
+    p_triage.set_defaults(func=cmd_triage)
+
+    p_pack = sub.add_parser("pack-glb", help="Repair zero tangents in a GLB")
+    p_pack.add_argument("--input", required=True)
+    p_pack.add_argument("--out", help="Output GLB path. Defaults to the input.")
+    p_pack.set_defaults(func=cmd_pack_glb)
+
+    p_ret.add_argument("--shell-contract", help="JSON separation groups and world-space gap probes")
+    p_ret.add_argument("--pymeshlab-operation", choices=("qecd-with-texture", "close-holes", "alpha-wrap"),
+                       help="Run an isolated PyMeshLab route. Alpha Wrap requires an explicit single-shell envelope.")
+    p_ret.add_argument("--knowledge-dir", type=Path, help="Local history directory override")
     p_ret.add_argument("--min-faces", type=int, default=2500)
     p_ret.add_argument("--max-faces", type=int, default=22000)
     p_ret.add_argument("--min-quad-ratio", type=float, default=0.80)
@@ -438,6 +470,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_uvb.add_argument("--max-p95-stretch", type=float, default=4.5)
     p_uvb.add_argument("--min-pack-pct", type=float, default=30.0)
     p_uvb.add_argument("--min-bake-cov", type=float, default=0.96)
+    p_uvb.add_argument("--max-heuristic-cross-layer-pct", type=float,
+                       default=UVBakeCriteria.max_heuristic_cross_layer_pct)
     p_uvb.add_argument("--seed", type=int, default=42)
     p_uvb.add_argument("--dry-run", action="store_true")
     p_uvb.set_defaults(func=cmd_uv_bake)

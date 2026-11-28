@@ -4,6 +4,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from collections import deque
 from pathlib import Path
 
@@ -12,6 +13,21 @@ import bpy
 import numpy as np
 from mathutils import Vector, kdtree
 from mathutils.bvhtree import BVHTree
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from blender_runtime import junk_objects, remove_export_junk
+from gap_coverage_validator import check_shell_contract, sample_shells
+from mesh_exchange import welded_mesh_copy
+
+if str(SCRIPT_DIR.parent) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR.parent))
+
+from pipeline.budget_allocator import allocate_object_budgets
+from pipeline.retopo_backends import AUTOREMESHER_TIMEOUT, AutoRemesherAdapter, AutoRemesherError
+from pipeline.sandbox import ShortPathWorkspace
 
 
 def _parse_args():
@@ -28,6 +44,8 @@ def _load_scene(filepath):
         bpy.ops.wm.open_mainfile(filepath=str(filepath))
     elif low.endswith(".glb") or low.endswith(".gltf"):
         bpy.ops.import_scene.gltf(filepath=str(filepath))
+    elif low.endswith(".obj"):
+        bpy.ops.wm.obj_import(filepath=str(filepath))
     else:
         raise ValueError(f"Unsupported input: {filepath}")
 
@@ -39,18 +57,15 @@ def _set_active_object(obj):
 
 
 def _get_primary_meshes():
-    junk = {"icosphere", "棱角球"}
-    return [
-        o
-        for o in bpy.context.scene.objects
-        if o.type == "MESH" and o.name.split(".")[0].lower() not in junk
-    ]
+    objects = bpy.context.scene.objects
+    ignored = set(junk_objects(objects))
+    return [o for o in objects if o.type == "MESH" and o not in ignored]
 
 
 def action_cleanup_scene_for_engine(params):
     """Remove unused placeholders (Icosphere/棱角球) and duplicate `.001` orphan objects."""
-    removed = []
-    junk_prefixes = tuple(params.get("junk_prefixes", ["Icosphere", "棱角球"]))
+    removed = remove_export_junk()
+    junk_prefixes = tuple(params.get("junk_prefixes", []))
     for obj in list(bpy.context.scene.objects):
         if any(obj.name.startswith(p) for p in junk_prefixes):
             removed.append(obj.name)
@@ -259,10 +274,13 @@ def _prune_small_shells_bm(bm, min_shell_verts=64):
 
 def action_heal_manifold(params):
     """Repair multi-face edges, pinch verts (nm_v), normals, and safe pinhole boundaries."""
-    max_hole_edges = int(params.get("max_hole_edges", 24))
+    standard_hole_limit = int(params.get("max_hole_edges", 24))
+    closed_objects = set(params.get("closed_objects", []))
     passes = int(params.get("passes", 6))
+    min_shell_verts = int(params.get("min_shell_verts", 48))
     summary = []
     for obj in _get_primary_meshes():
+        max_hole_edges = max(32, standard_hole_limit) if obj.name in closed_objects else standard_hole_limit
         bm = bmesh.new()
         bm.from_mesh(obj.data)
         removed_nm_faces = _purge_non_manifold_bm(bm, max_passes=passes)
@@ -335,7 +353,7 @@ def action_heal_manifold(params):
             # Final purge + micro-shell prune guarantees strictly zero non-manifold & zero detached fragments on exit
             removed_nm_faces += _purge_non_manifold_bm(bm, max_passes=passes)
 
-        _prune_small_shells_bm(bm, min_shell_verts=48)
+        _prune_small_shells_bm(bm, min_shell_verts=min_shell_verts)
         loose_e = [e for e in bm.edges if e.is_valid and len(e.link_faces) == 0]
         if loose_e:
             bmesh.ops.delete(bm, geom=loose_e, context="EDGES")
@@ -423,11 +441,28 @@ def action_voxel_remesh_seal(params):
     return {"voxel_sealed": out}
 
 
-def action_adaptive_voxel_quadriflow(params):
+def _mesh_targets(params, default):
+    meshes = _get_primary_meshes()
+    budget = int(params.get("target_faces", default))
+    targets = params.get("per_mesh_targets")
+    if targets is None:
+        # Direct worker callers may omit the planner's weighted targets.
+        share, remainder = divmod(budget, max(1, len(meshes)))
+        targets = {mesh.name: share + (i < remainder)
+                   for i, mesh in enumerate(sorted(meshes, key=lambda obj: obj.name))}
+    if set(targets) != {mesh.name for mesh in meshes} or sum(targets.values()) > budget:
+        raise ValueError("Invalid per_mesh_targets for current meshes and total budget")
+    for mesh in meshes:
+        target = targets[mesh.name]
+        if not isinstance(target, int) or target < 1:
+            raise ValueError(f"budget_infeasible: no usable quota for {mesh.name}")
+        yield mesh, target
+
+
+def action_adaptive_voxel_quadriflow(params, check_preprocess=None):
     """Escalate voxel scale cleanly from a mesh backup until Quadriflow converges."""
     raw_scales = params.get("voxel_scales") or [0.012, 0.022, 0.032, 0.042]
     scales = [float(s) for s in raw_scales]
-    target_faces = int(params.get("target_faces", 14000))
     min_shell_verts = int(params.get("min_shell_verts", 64))
     preserve_sharp = bool(params.get("use_preserve_sharp", False))
     preserve_boundary = bool(params.get("use_preserve_boundary", False))
@@ -436,7 +471,7 @@ def action_adaptive_voxel_quadriflow(params):
     seed = int(params.get("seed", 0))
 
     out = []
-    for obj in _get_primary_meshes():
+    for obj, target_faces in _mesh_targets(params, 14000):
         orig_mesh = obj.data.copy()
         orig_mesh.name = f"__AdaptiveVoxelOrig_{obj.name}"
         chosen = None
@@ -463,6 +498,8 @@ def action_adaptive_voxel_quadriflow(params):
                 bm.to_mesh(obj.data)
                 bm.free()
                 obj.data.update()
+                if check_preprocess:
+                    check_preprocess()
 
                 pre_faces = len(obj.data.polygons)
                 if 100 <= pre_faces < int(target_faces * 1.4):
@@ -512,58 +549,286 @@ def action_adaptive_voxel_quadriflow(params):
     return {"adaptive_voxel_quadriflow": out}
 
 
-def action_quadriflow_retopo(params):
-    """Retopologize meshes into clean edge-loop pure quads using Quadriflow."""
-    target_faces = int(params.get("target_faces", 12000))
+def _separate_disconnected_shells(obj):
+    if len(sample_shells([obj])) < 2:
+        return [obj]
+    previous = {item.as_pointer() for item in bpy.context.scene.objects}
+    _set_active_object(obj)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.separate(type="LOOSE")
+    bpy.ops.object.mode_set(mode="OBJECT")
+    return [obj, *sorted((item for item in bpy.context.scene.objects if item.as_pointer() not in previous),
+                         key=lambda item: item.name)]
+
+
+def _quadriflow_with_budget(obj, quota, **options):
+    _set_active_object(obj)
+    original = obj.data
+    initial_faces = len(original.polygons)
+    target = quota
+    for _ in range(3):
+        obj.data = original.copy()
+        accepted = False
+        try:
+            outcome = bpy.ops.object.quadriflow_remesh(mode="FACES", target_faces=target, **options)
+            actual = len(obj.data.polygons)
+            if "FINISHED" not in outcome or actual == 0 or (initial_faces > quota * 3 and actual > quota * 2.5):
+                raise RuntimeError(
+                    f"quadriflow_remesh failed on '{obj.name}': result={outcome}, pre_faces={initial_faces}, post_faces={actual}"
+                )
+            accepted = actual <= quota
+            if accepted:
+                return actual
+        finally:
+            if accepted:
+                if original.users == 0:
+                    bpy.data.meshes.remove(original)
+            else:
+                rejected = obj.data
+                obj.data = original
+                if rejected.users == 0:
+                    bpy.data.meshes.remove(rejected)
+        target = max(1, min(target - 1, int(target * quota / actual * 0.98)))
+    raise RuntimeError(f"budget_exceeded: {obj.name} has {actual} faces with a quota of {quota}")
+
+
+def _shell_extrema(obj):
+    vertices = obj.data.vertices
+    return [max(vertices, key=lambda vertex: sign * vertex.co[axis]).co.copy()
+            for axis in range(3) for sign in (-1, 1)]
+
+
+def _recover_shell_extrema(obj, source):
+    """Recover only bounded loss of local silhouette extrema before guarded reprojection."""
+    measures = _shell_extrema(obj)
+    diagonal = Vector([source[i + 1][i // 2] - source[i][i // 2] for i in range(0, 6, 2)]).length
+    if diagonal <= 1e-8:
+        return
+    vertices = obj.data.vertices
+    tree = kdtree.KDTree(len(vertices))
+    for vertex in vertices:
+        tree.insert(vertex.co, vertex.index)
+    tree.balance()
+    displacements = {}
+    for i, target in enumerate(source):
+        axis, sign = i // 2, 1 if i % 2 else -1
+        if sign * (target[axis] - measures[i][axis]) < diagonal * 0.008:
+            continue
+        origin, _, distance = tree.find(target)
+        if distance > diagonal * 0.065:
+            continue
+        delta = target - origin
+        radius = max(distance * 3, diagonal * 0.04)
+        for _, index, radius_distance in tree.find_range(origin, radius):
+            weight = (1 - (radius_distance / radius) ** 2) ** 2
+            if index not in displacements or displacements[index][0] < weight:
+                displacements[index] = (weight, delta)
+    for index, (weight, delta) in displacements.items():
+        vertices[index].co += weight * delta
+    obj.data.update()
+
+
+def action_quadriflow_retopo(params, *, targets=None):
+    """Retopologize welded shells independently so a dominant shell cannot consume a thin part's quota."""
     preserve_sharp = bool(params.get("use_preserve_sharp", False))
     preserve_boundary = bool(params.get("use_preserve_boundary", False))
     use_symmetry = bool(params.get("use_mesh_symmetry", False))
     smooth_normals = bool(params.get("smooth_normals", False))
+    if targets is None:
+        targets = list(_mesh_targets(params, 12000))
+    per_mesh_sharp = params.get("per_mesh_preserve_sharp", {})
     out = []
-    for obj in _get_primary_meshes():
-        pre_faces = len(obj.data.polygons)
-        _set_active_object(obj)
-        res = bpy.ops.object.quadriflow_remesh(
-            mode="FACES",
-            target_faces=target_faces,
-            use_mesh_symmetry=use_symmetry,
-            use_preserve_sharp=preserve_sharp,
-            use_preserve_boundary=preserve_boundary,
-            smooth_normals=smooth_normals,
-            seed=int(params.get("seed", 0)),
-        )
+    for obj, target_faces in targets:
+        sharp = per_mesh_sharp.get(obj.name, preserve_sharp)
+        shells = _separate_disconnected_shells(obj)
+        budgets = allocate_object_budgets([
+            {"part_id": shell.name, "surface_area": sum(face.area for face in shell.data.polygons),
+             "faces_raw": len(shell.data.polygons)}
+            for shell in shells
+        ], target_faces)
+        fallbacks = []
+        for shell in shells:
+            extrema = _shell_extrema(shell) if len(shells) > 1 else None
+            quota = budgets[shell.name]
+            if quota < 1:
+                raise RuntimeError(f"budget_infeasible: {shell.name} needs a usable surface budget")
+            reason = "small_part" if quota < 600 or len(shell.data.polygons) <= max(600, int(quota * 1.25)) else ""
+            if not reason:
+                try:
+                    _quadriflow_with_budget(
+                        shell, quota, use_mesh_symmetry=use_symmetry,
+                        use_preserve_sharp=sharp, use_preserve_boundary=preserve_boundary,
+                        smooth_normals=smooth_normals, seed=int(params.get("seed", 0)),
+                    )
+                except RuntimeError as exc:
+                    if len(targets) == 1 and len(shells) == 1:
+                        raise
+                    reason = str(exc).strip()
+            if reason:
+                actual = _local_retopo_with_budget(shell, quota)
+                fallbacks.append({"shell": shell.name, "reason": reason, "faces": actual, "quota": quota})
+            if extrema:
+                _recover_shell_extrema(shell, extrema)
+        if len(shells) > 1:
+            _set_active_object(obj)
+            for shell in shells:
+                shell.select_set(True)
+            bpy.ops.object.join()
         post_faces = len(obj.data.polygons)
-        if "FINISHED" not in res or (pre_faces > target_faces * 3 and post_faces > target_faces * 2.5):
-            raise RuntimeError(
-                f"quadriflow_remesh failed on '{obj.name}': result={res}, pre_faces={pre_faces}, post_faces={post_faces}"
-            )
         for p in obj.data.polygons:
             p.use_smooth = True
         quads = sum(1 for p in obj.data.polygons if len(p.vertices) == 4)
-        out.append({"mesh": obj.name, "faces": post_faces, "quads": quads})
+        out.append({"mesh": obj.name, "faces": post_faces, "quads": quads, "local_fallbacks": fallbacks})
     return {"quadriflow": out}
+
+
+def _remove_exchange_object(obj):
+    mesh = obj.data
+    bpy.data.objects.remove(obj, do_unlink=True)
+    if isinstance(mesh, bpy.types.Mesh) and mesh.users == 0:
+        bpy.data.meshes.remove(mesh)
+
+
+def _autoremesh_part(obj, quota, adapter, workspace, deadline, max_p95_pct):
+    source = workspace.path("input.obj")
+    output = workspace.path("output.obj")
+    reference = sample_shells([obj])
+    clone = bpy.data.objects.new("AutoRemesherExchange", welded_mesh_copy(obj.data))
+    bpy.context.scene.collection.objects.link(clone)
+    try:
+        _set_active_object(clone)
+        bpy.ops.wm.obj_export(filepath=str(source), forward_axis="Y", up_axis="Z",
+                              export_selected_objects=True, export_uv=False, export_normals=False,
+                              export_materials=False, apply_modifiers=False)
+    finally:
+        _remove_exchange_object(clone)
+
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise AutoRemesherError("autoremesher_timeout", "150s route deadline reached")
+    elapsed = adapter.remesh(source, output, target_quads=max(1, int(quota * 0.85)), timeout=remaining)
+    previous = {item.as_pointer() for item in bpy.context.scene.objects}
+    try:
+        imported = bpy.ops.wm.obj_import(filepath=str(output), forward_axis="Y", up_axis="Z")
+        candidates = [item for item in bpy.context.scene.objects if item.as_pointer() not in previous]
+        if "FINISHED" not in imported or len(candidates) != 1 or candidates[0].type != "MESH":
+            raise AutoRemesherError("autoremesher_execution_failed", f"{obj.name} expected one mesh")
+        candidate = candidates[0]
+        candidate.data.transform(candidate.matrix_world)
+        candidate.matrix_world = obj.matrix_world
+        if any(face.loop_total > 4 for face in candidate.data.polygons):
+            bm = bmesh.new()
+            try:
+                bm.from_mesh(candidate.data)
+                bmesh.ops.triangulate(bm, faces=[face for face in bm.faces if len(face.verts) > 4])
+                bm.to_mesh(candidate.data)
+            finally:
+                bm.free()
+        bpy.context.view_layer.update()
+        faces = len(candidate.data.polygons)
+        if not faces:
+            raise AutoRemesherError("autoremesher_execution_failed", f"{obj.name} returned an empty mesh")
+        coverage = check_shell_contract([candidate], reference, max_p95_pct=max_p95_pct)
+        if not coverage["passed"]:
+            raise AutoRemesherError("autoremesher_shell_coverage", ", ".join(coverage["issues"]))
+        if faces > quota:
+            raise AutoRemesherError("autoremesher_budget_exceeded", f"{obj.name} has {faces} faces, quota {quota}")
+        old = obj.data
+        obj.data = candidate.data
+        if old.users == 0:
+            bpy.data.meshes.remove(old)
+        return {"mesh": obj.name, "faces": faces, "quota": quota, "elapsed_seconds": elapsed,
+                "shells_in": len(reference), "shells_out": coverage["shells_out"],
+                "shell_coverage_missing": coverage["shell_coverage_missing"]}
+    except AutoRemesherError:
+        raise
+    except RuntimeError as exc:
+        raise AutoRemesherError("autoremesher_execution_failed", str(exc)) from exc
+    finally:
+        for item in list(bpy.context.scene.objects):
+            if item.as_pointer() not in previous:
+                _remove_exchange_object(item)
+
+
+def action_autoremesher_retopo(params):
+    adapter = AutoRemesherAdapter.discover()
+    if adapter is None:
+        raise AutoRemesherError("autoremesher_execution_failed", "compatible CLI unavailable")
+    eligible = set(params["auto_parts"])
+    targets = list(_mesh_targets(params, 12000))
+    deadline = time.monotonic() + AUTOREMESHER_TIMEOUT
+    accepted, rollbacks, quadriflow_targets = [], [], []
+    with ShortPathWorkspace(Path.cwd()) as workspace:
+        for obj, quota in targets:
+            if obj.name in eligible:
+                try:
+                    accepted.append(_autoremesh_part(obj, quota, adapter, workspace, deadline,
+                                                     params["max_p95_dev_pct"]))
+                    continue
+                except AutoRemesherError as exc:
+                    rollbacks.append({"mesh": obj.name, "reason": exc.code, "detail": str(exc)})
+            quadriflow_targets.append((obj, quota))
+    if not accepted:
+        if rollbacks:
+            raise RuntimeError(" | ".join(item["detail"] for item in rollbacks))
+        raise AutoRemesherError("autoremesher_execution_failed", "plan has no eligible mesh")
+    quadriflow = action_quadriflow_retopo(params, targets=quadriflow_targets)["quadriflow"]
+    return {"autoremesher": accepted, "local_rollbacks": rollbacks, "quadriflow": quadriflow}
+
+
+def _collapse_object(obj, ratio):
+    _set_active_object(obj)
+    mod = obj.modifiers.new("AgentDecimate", "DECIMATE")
+    mod.decimate_type = "COLLAPSE"
+    mod.ratio = ratio
+    mod.use_collapse_triangulate = False
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+
+def _quadify_object(obj):
+    _set_active_object(obj)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.remove_doubles(threshold=1e-4)
+    bpy.ops.mesh.tris_convert_to_quads()
+    bpy.ops.mesh.normals_make_consistent(inside=False)
+    bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def _local_retopo_with_budget(obj, quota):
+    _quadify_object(obj)
+    original = obj.data
+    actual = len(original.polygons)
+    if 0 < actual <= quota:
+        return actual
+    ratio = quota / max(1, actual)
+    for _ in range(4):
+        obj.data = original.copy()
+        _collapse_object(obj, ratio)
+        _quadify_object(obj)
+        actual = len(obj.data.polygons)
+        if 0 < actual <= quota:
+            if original.users == 0:
+                bpy.data.meshes.remove(original)
+            return actual
+        rejected = obj.data
+        obj.data = original
+        if rejected.users == 0:
+            bpy.data.meshes.remove(rejected)
+        if not actual:
+            break
+        ratio *= 0.95 * quota / actual
+    raise RuntimeError(f"budget_infeasible: local fallback for {obj.name} produced {actual} faces (quota {quota})")
 
 
 def action_decimate_and_quadify(params):
     """Collapse-decimate dense meshes to target face budget then quadify."""
-    target_faces = int(params.get("target_faces", 14000))
     out = []
-    for obj in _get_primary_meshes():
-        cur_f = max(1, len(obj.data.polygons))
-        if cur_f > target_faces:
-            ratio = max(0.005, min(1.0, target_faces / cur_f))
-            _set_active_object(obj)
-            mod = obj.modifiers.new("AgentDecimate", "DECIMATE")
-            mod.decimate_type = "COLLAPSE"
-            mod.ratio = ratio
-            mod.use_collapse_triangulate = False
-            bpy.ops.object.modifier_apply(modifier=mod.name)
-        bpy.ops.object.mode_set(mode="EDIT")
-        bpy.ops.mesh.select_all(action="SELECT")
-        bpy.ops.mesh.remove_doubles(threshold=1e-4)
-        bpy.ops.mesh.tris_convert_to_quads()
-        bpy.ops.mesh.normals_make_consistent(inside=False)
-        bpy.ops.object.mode_set(mode="OBJECT")
+    for obj, target_faces in _mesh_targets(params, 14000):
+        if len(obj.data.polygons) > target_faces:
+            _collapse_object(obj, max(0.005, target_faces / len(obj.data.polygons)))
+        _quadify_object(obj)
         quads = sum(1 for p in obj.data.polygons if len(p.vertices) == 4)
         out.append({"mesh": obj.name, "faces": len(obj.data.polygons), "quads": quads})
     return {"decimated": out}
@@ -785,72 +1050,6 @@ def action_refine_quad_flow(params, reference_glb):
                 bpy.data.objects.remove(o, do_unlink=True)
 
 
-def _backup_and_wire_metallic_emit(ref_obj):
-    """Switch ref_obj materials temporarily to output Metallic channel cleanly via Emission."""
-    backups = []
-    for mat in ref_obj.data.materials:
-        if not mat or not mat.use_nodes:
-            continue
-        nodes = mat.node_tree.nodes
-        links = mat.node_tree.links
-        out_node = next((n for n in nodes if n.type == "OUTPUT_MATERIAL" and n.is_active_output), None)
-        if not out_node:
-            out_node = next((n for n in nodes if n.type == "OUTPUT_MATERIAL"), None)
-        bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
-        if not out_node or not bsdf:
-            continue
-        orig_surf = out_node.inputs["Surface"].links[0].from_socket if out_node.inputs["Surface"].is_linked else None
-        em = nodes.new("ShaderNodeEmission")
-        met_in = bsdf.inputs["Metallic"]
-        if met_in.is_linked:
-            links.new(met_in.links[0].from_socket, em.inputs["Color"])
-        else:
-            mval = float(met_in.default_value)
-            em.inputs["Color"].default_value = (mval, mval, mval, 1.0)
-        links.new(em.outputs["Emission"], out_node.inputs["Surface"])
-        backups.append((mat, out_node, orig_surf, em))
-    return backups
-
-
-def _restore_materials_from_emit(backups):
-    for mat, out_node, orig_surf, em in backups:
-        if orig_surf is not None:
-            mat.node_tree.links.new(orig_surf, out_node.inputs["Surface"])
-        mat.node_tree.nodes.remove(em)
-
-
-def _prepare_ref_color_baking_shader(ref_obj):
-    """Make metallic surfaces emit pure albedo during bake so gold/silver doesn't bake black."""
-    for mat in ref_obj.data.materials:
-        if not mat or not mat.use_nodes:
-            continue
-        bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
-        if bsdf and not bsdf.inputs["Metallic"].is_linked:
-            bsdf.inputs["Metallic"].default_value = 0.0
-        elif bsdf and bsdf.inputs["Metallic"].is_linked:
-            for lk in list(mat.node_tree.links):
-                if lk.to_socket == bsdf.inputs["Metallic"]:
-                    mat.node_tree.links.remove(lk)
-            bsdf.inputs["Metallic"].default_value = 0.0
-
-
-def _combine_orm_image(name, rough_img, met_img, out_path):
-    """Pack Roughness (Green) & Metallic (Blue) cleanly into one glTF-standard ORM texture."""
-    w, h = rough_img.size
-    r_px = np.array(rough_img.pixels[:], dtype=np.float32).reshape((h, w, 4))
-    m_px = np.array(met_img.pixels[:], dtype=np.float32).reshape((h, w, 4))
-    orm = np.ones((h, w, 4), dtype=np.float32)
-    orm[..., 0] = 1.0
-    orm[..., 1] = r_px[..., 1]
-    orm[..., 2] = m_px[..., 0]
-    orm[..., 3] = 1.0
-    orm_img = bpy.data.images.new(name, width=w, height=h, alpha=False)
-    orm_img.colorspace_settings.name = "Non-Color"
-    orm_img.pixels[:] = orm.reshape(-1).tolist()
-    orm_img.filepath_raw = str(out_path)
-    orm_img.file_format = "PNG"
-    orm_img.save()
-    return orm_img
 
 
 def _dilate_diffuse_rgb_keep_alpha(img, passes=6):
@@ -888,162 +1087,31 @@ def _dilate_diffuse_rgb_keep_alpha(img, passes=6):
     img.save()
 
 
-def _sanitize_tangent_normal_image(img, min_b=0.68):
-    """Clamp backface-hit tangent normals (Z <= 0 / strong inversion) to flat tangent normal."""
-    w, h = img.size
-    if w <= 0 or h <= 0:
-        return
-    px = np.array(img.pixels[:], dtype=np.float32).reshape((h, w, 4))
-    bad = px[..., 2] < float(min_b)
-    if bad.any():
-        px[bad, 0] = 0.5
-        px[bad, 1] = 0.5
-        px[bad, 2] = 1.0
-        img.pixels[:] = px.reshape(-1).tolist()
-        img.save()
 
 
 def action_unwrap_and_bake_textures(params, reference_glb, textures_out_dir):
-    """Smart UV project cleaned low-poly and Cycles-bake Diffuse/Normal/Roughness+Metallic from reference."""
-    if not reference_glb or not Path(reference_glb).is_file():
-        raise FileNotFoundError(f"Missing reference_glb for texture bake: {reference_glb}")
+    """Prepare local UVs then use the shared PBR atlas baker."""
+    from uv_bake_toolkit import action_bake_pbr_maps
 
-    tex_size = int(params.get("texture_size", 2048))
-    angle_limit_deg = float(params.get("angle_limit_deg", 86.0))
-    island_margin = float(params.get("island_margin", 0.004))
-    cage_extrusion = float(params.get("cage_extrusion", 0.003))
-    max_ray_distance = float(params.get("max_ray_distance", 0.018))
-    normal_strength = float(params.get("normal_strength", 0.55))
-    samples = int(params.get("bake_samples", 12))
-    out_dir = Path(textures_out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+    for obj in _get_primary_meshes():
+        if obj.data.users > 1:
+            obj.data = obj.data.copy()
+        _set_active_object(obj)
+        if not obj.data.uv_layers:
+            obj.data.uv_layers.new(name="UVMap")
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.uv.smart_project(angle_limit=math.radians(float(params.get("angle_limit_deg", 86.0))),
+                                 island_margin=float(params.get("island_margin", 0.004)))
+        bpy.ops.object.mode_set(mode="OBJECT")
+    result = action_bake_pbr_maps(params, reference_glb, textures_out_dir)
+    return {**result, "baked_textures": next(iter(result["baked_pbr"]["meshes"].values()))}
 
-    cand_meshes = _get_primary_meshes()
-    ref_obj, imported = _import_temp_reference(reference_glb)
-    sc = bpy.context.scene
-    prev_engine = sc.render.engine
-    try:
-        sc.render.engine = "CYCLES"
-        sc.cycles.device = "CPU"
-        try:
-            prefs = bpy.context.preferences.addons["cycles"].preferences
-            prefs.compute_device_type = "OPTIX"
-            prefs.refresh_devices()
-            if any(d.type != "CPU" for d in prefs.devices):
-                for d in prefs.devices:
-                    d.use = d.type != "CPU"
-                sc.cycles.device = "GPU"
-        except Exception:
-            sc.cycles.device = "CPU"
-        sc.cycles.samples = samples
-        sc.cycles.use_denoising = False
 
-        baked_paths = {}
+def action_pymeshlab_retopo(params, ctx):
+    from pymeshlab_exchange import run_pymeshlab_exchange
 
-        def _bake_single_map(obj, mat, role, btype, pfilter, cspace, dst):
-            img = bpy.data.images.new(f"{obj.name}_baked_{role}", width=tex_size, height=tex_size, alpha=True)
-            img.colorspace_settings.name = cspace
-            tnode = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            tnode.image = img
-            mat.node_tree.nodes.active = tnode
-            tnode.select = True
-
-            bpy.ops.object.select_all(action="DESELECT")
-            ref_obj.select_set(True)
-            obj.select_set(True)
-            bpy.context.view_layer.objects.active = obj
-
-            sc.render.bake.use_pass_direct = False
-            sc.render.bake.use_pass_indirect = False
-            sc.render.bake.use_pass_color = True
-            bake_kwargs = {
-                "type": btype,
-                "use_selected_to_active": True,
-                "cage_extrusion": cage_extrusion,
-                "max_ray_distance": max_ray_distance,
-                "margin": 12,
-                "margin_type": "EXTEND",
-                "use_clear": True,
-                "normal_space": "TANGENT",
-            }
-            if pfilter:
-                bake_kwargs["pass_filter"] = pfilter
-            bpy.ops.object.bake(**bake_kwargs)
-            img.filepath_raw = str(dst)
-            img.file_format = "PNG"
-            img.save()
-            return tnode, img
-
-        for obj in cand_meshes:
-            _set_active_object(obj)
-            if not obj.data.uv_layers:
-                obj.data.uv_layers.new(name="UVMap")
-            bpy.ops.object.mode_set(mode="EDIT")
-            bpy.ops.mesh.select_all(action="SELECT")
-            bpy.ops.uv.smart_project(angle_limit=math.radians(angle_limit_deg), island_margin=island_margin)
-            bpy.ops.object.mode_set(mode="OBJECT")
-
-            obj.data.materials.clear()
-            mat = bpy.data.materials.new(f"{obj.name}_RetopoMat")
-            mat.use_nodes = True
-            bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
-            bsdf.inputs["Metallic"].default_value = 0.0
-            bsdf.inputs["Roughness"].default_value = 0.65
-            obj.data.materials.append(mat)
-
-            # 1. Bake Metallic via Emit while source materials are untouched
-            met_backups = _backup_and_wire_metallic_emit(ref_obj)
-            t_met, img_met = _bake_single_map(
-                obj, mat, "metallic", "EMIT", set(), "Non-Color", out_dir / f"{obj.name}_baked_metallic.png"
-            )
-            _restore_materials_from_emit(met_backups)
-
-            # 2. Bake Roughness & Tangent Normal from untouched source materials
-            t_rough, img_rough = _bake_single_map(
-                obj, mat, "roughness", "ROUGHNESS", set(), "Non-Color", out_dir / f"{obj.name}_baked_roughness.png"
-            )
-            t_norm, img_norm = _bake_single_map(
-                obj, mat, "normal", "NORMAL", set(), "Non-Color", out_dir / f"{obj.name}_baked_normal.png"
-            )
-            _sanitize_tangent_normal_image(img_norm, min_b=0.68)
-
-            # 3. Zero Metallic on reference so Diffuse albedo bakes crisp on gold/silver surfaces
-            _prepare_ref_color_baking_shader(ref_obj)
-            t_diff, img_diff = _bake_single_map(
-                obj, mat, "diffuse", "DIFFUSE", {"COLOR"}, "sRGB", out_dir / f"{obj.name}_baked_diffuse.png"
-            )
-            _dilate_diffuse_rgb_keep_alpha(img_diff, passes=6)
-
-            # Pack ORM (G=Roughness, B=Metallic) & remove scratch single-channel nodes cleanly
-            orm_dst = out_dir / f"{obj.name}_baked_orm.png"
-            orm_img = _combine_orm_image(f"{obj.name}_baked_orm", img_rough, img_met, orm_dst)
-            mat.node_tree.nodes.remove(t_met)
-            mat.node_tree.nodes.remove(t_rough)
-            t_orm = mat.node_tree.nodes.new("ShaderNodeTexImage")
-            t_orm.image = orm_img
-            sep = mat.node_tree.nodes.new("ShaderNodeSeparateColor")
-
-            links = mat.node_tree.links
-            links.new(t_diff.outputs["Color"], bsdf.inputs["Base Color"])
-            links.new(t_orm.outputs["Color"], sep.inputs["Color"])
-            links.new(sep.outputs["Green"], bsdf.inputs["Roughness"])
-            links.new(sep.outputs["Blue"], bsdf.inputs["Metallic"])
-
-            nmap = mat.node_tree.nodes.new("ShaderNodeNormalMap")
-            nmap.inputs["Strength"].default_value = normal_strength
-            links.new(t_norm.outputs["Color"], nmap.inputs["Color"])
-            links.new(nmap.outputs["Normal"], bsdf.inputs["Normal"])
-
-            baked_paths[f"{obj.name}_diffuse"] = str(out_dir / f"{obj.name}_baked_diffuse.png")
-            baked_paths[f"{obj.name}_normal"] = str(out_dir / f"{obj.name}_baked_normal.png")
-            baked_paths[f"{obj.name}_orm"] = str(orm_dst)
-
-        return {"baked_textures": baked_paths}
-    finally:
-        sc.render.engine = prev_engine
-        for o in imported:
-            if o.name in bpy.data.objects:
-                bpy.data.objects.remove(o, do_unlink=True)
+    return run_pymeshlab_exchange(_get_primary_meshes(), params, ctx["shell_contract"], ctx["pymeshlab_python"])
 
 
 ACTION_DISPATCH = {
@@ -1052,8 +1120,10 @@ ACTION_DISPATCH = {
     "heal_manifold": lambda p, ctx: action_heal_manifold(p),
     "weld_and_quadify": lambda p, ctx: action_weld_and_quadify(p),
     "voxel_remesh_seal": lambda p, ctx: action_voxel_remesh_seal(p),
-    "adaptive_voxel_quadriflow": lambda p, ctx: action_adaptive_voxel_quadriflow(p),
+    "adaptive_voxel_quadriflow": lambda p, ctx: action_adaptive_voxel_quadriflow(p, ctx["check_preprocess"]),
     "quadriflow_retopo": lambda p, ctx: action_quadriflow_retopo(p),
+    "autoremesher_retopo": lambda p, ctx: action_autoremesher_retopo(p),
+    "pymeshlab_retopo": action_pymeshlab_retopo,
     "decimate_and_quadify": lambda p, ctx: action_decimate_and_quadify(p),
     "shrinkwrap_to_reference": lambda p, ctx: action_shrinkwrap_to_reference(p, ctx["reference_glb"]),
     "refine_quad_flow": lambda p, ctx: action_refine_quad_flow(p, ctx["reference_glb"]),
@@ -1072,6 +1142,24 @@ def main():
         "reference_glb": plan.get("reference_glb", plan["input_path"]),
         "textures_dir": plan["textures_dir"],
     }
+    shell_contract = plan.get("shell_contract") or {}
+    ctx["shell_contract"] = shell_contract
+    ctx["pymeshlab_python"] = plan.get("pymeshlab_python")
+    shell_samples = sample_shells(_get_primary_meshes()) if shell_contract else []
+    stage_checks = []
+
+    def check_preprocess():
+        if not shell_contract:
+            return
+        result = check_shell_contract(_get_primary_meshes(), shell_samples, shell_contract, phase="preprocess",
+                                      max_p95_pct=plan.get("max_p95_dev_pct", 2.2))
+        stage_checks.append(result)
+        if not result["passed"]:
+            raise RuntimeError(f"Shell gate refused preprocessing: {result['issues']}")
+
+    ctx["check_preprocess"] = check_preprocess
+    if shell_contract and not shell_contract.get("single_shell_envelope"):
+        check_preprocess()
     step_logs = []
     for step in plan["actions"]:
         name = step["action"]
@@ -1079,8 +1167,16 @@ def main():
         if name not in ACTION_DISPATCH:
             raise ValueError(f"Unknown toolkit action: {name}")
         res = ACTION_DISPATCH[name](params, ctx)
+        if name in {"sanitize_mesh", "heal_manifold", "weld_and_quadify", "voxel_remesh_seal", "pymeshlab_retopo"}:
+            if not shell_contract.get("single_shell_envelope") or name == "voxel_remesh_seal":
+                check_preprocess()
+        if "target_faces" in params:
+            faces = sum(len(obj.data.polygons) for obj in _get_primary_meshes())
+            if faces > params["target_faces"]:
+                raise RuntimeError(f"budget_exceeded: {faces} > {params['target_faces']}")
         step_logs.append({"action": name, "params": params, "result": res})
 
+    remove_export_junk()
     bpy.ops.file.pack_all()
     out_blend = Path(plan["output_blend"])
     out_glb = Path(plan["output_glb"])
@@ -1091,6 +1187,7 @@ def main():
         export_format="GLB",
         export_animations=True,
         export_skins=True,
+        export_tangents=True,
     )
 
     report = {
@@ -1098,6 +1195,8 @@ def main():
         "output_blend": str(out_blend),
         "output_glb": str(out_glb),
         "steps": step_logs,
+        "preprocess_shell_checks": stage_checks,
+        "junk_objects": [o.name for o in junk_objects(bpy.context.scene.objects)],
     }
     Path(plan["execution_log"]).write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print("Topology toolkit finished executing plan ->", out_glb)
